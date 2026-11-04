@@ -38,6 +38,8 @@ class TgError(Exception):
 
 
 def tg(method, **params):
+    if method != "getUpdates":
+        log.info("-> %s", method)
     data = json.dumps({k: v for k, v in params.items() if v is not None}).encode()
     req = urllib.request.Request(API.format(TOKEN, method), data=data,
                                  headers={"Content-Type": "application/json"})
@@ -315,11 +317,18 @@ def on_callback(con, cq):
     try:
         tg("answerCallbackQuery", callback_query_id=cq["id"], text=answer_text,
            show_alert=bool(answer_text))
-    except TgError:
-        pass
+    except (TgError, OSError) as e:
+        log.warning("answerCallbackQuery: %s", e)
 
 
 def handle(con, upd):
+    kind = next((k for k in upd if k != "update_id"), "?")
+    if kind == "callback_query":
+        log.info("update %s callback %s", upd.get("update_id"), upd["callback_query"].get("data"))
+    elif kind == "message":
+        log.info("update %s message %r", upd.get("update_id"), (upd["message"].get("text") or "")[:30])
+    else:
+        log.info("update %s %s", upd.get("update_id"), kind)
     if "channel_post" in upd or "edited_channel_post" in upd:
         post = upd.get("channel_post") or upd.get("edited_channel_post")
         uname = (post.get("chat", {}).get("username") or "").lower()

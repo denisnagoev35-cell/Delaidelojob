@@ -5,15 +5,14 @@
 данные в SQLite. Настройки берутся из файла окружения (см. ddbot.env.example).
 """
 import html
+import http.client
 import json
 import logging
 import os
 import re
+import socket
 import sqlite3
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 
 import texts as T
 
@@ -24,7 +23,6 @@ CHANNEL = os.environ.get("CHANNEL", "@delaidelojob")
 CHANNEL_INVITE = os.environ.get("CHANNEL_INVITE", T.CHANNEL_URL_FALLBACK)
 ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split(",") if x}
 DB_PATH = os.environ.get("DB_PATH", "ddbot.sqlite3")
-API = "https://api.telegram.org/bot{}/{}"
 
 HASHTAG_RE = re.compile(r"#[0-9A-Za-zА-Яа-яЁё_]+")
 CLOSED_RE = re.compile(r"закрыт", re.IGNORECASE)
@@ -37,21 +35,52 @@ class TgError(Exception):
     pass
 
 
+# Telegram доступен по IPv4; на части VPS IPv6 «висит» и каждое соединение ждёт таймаут.
+if os.environ.get("FORCE_IPV4", "1") == "1":
+    _orig_gai = socket.getaddrinfo
+
+    def _gai_v4(host, *args, **kw):
+        res = _orig_gai(host, *args, **kw)
+        v4 = [r for r in res if r[0] == socket.AF_INET]
+        return v4 or res
+    socket.getaddrinfo = _gai_v4
+
+_conns = {}
+
+
+def _conn(kind, timeout):
+    c = _conns.get(kind)
+    if c is None:
+        c = http.client.HTTPSConnection("api.telegram.org", timeout=timeout)
+        _conns[kind] = c
+    c.timeout = timeout
+    if c.sock is not None:
+        c.sock.settimeout(timeout)
+    return c
+
+
 def tg(method, **params):
-    if method != "getUpdates":
-        log.info("-> %s", method)
-    data = json.dumps({k: v for k, v in params.items() if v is not None}).encode()
-    req = urllib.request.Request(API.format(TOKEN, method), data=data,
-                                 headers={"Content-Type": "application/json"})
+    """Вызов Bot API по постоянному соединению (без нового TLS на каждый запрос)."""
+    body = json.dumps({k: v for k, v in params.items() if v is not None}).encode()
+    kind = "poll" if method == "getUpdates" else "api"
     timeout = params.get("timeout", 0) + 15
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            res = json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
+    path = f"/bot{TOKEN}/{method}"
+    for attempt in (1, 2):
+        c = _conn(kind, timeout)
         try:
-            res = json.loads(e.read().decode())
-        except Exception:
-            raise TgError(f"{method}: HTTP {e.code}")
+            c.request("POST", path, body=body, headers={"Content-Type": "application/json"})
+            r = c.getresponse()
+            raw = r.read()
+            break
+        except (OSError, http.client.HTTPException) as e:
+            c.close()
+            _conns.pop(kind, None)
+            if attempt == 2:
+                raise TgError(f"{method}: {e.__class__.__name__}: {e}")
+    try:
+        res = json.loads(raw.decode())
+    except ValueError:
+        raise TgError(f"{method}: bad response")
     if not res.get("ok"):
         raise TgError(f"{method}: {res.get('description')}")
     return res["result"]
@@ -271,6 +300,11 @@ def on_callback(con, cq):
     mid = msg.get("message_id")
     touch_user(con, uid)
     answer_text = None
+    answered = False
+    if not data.startswith("f:"):
+        # сразу гасим «часики» на кнопке, а потом уже меняем сообщение
+        _answer(cq["id"])
+        answered = True
 
     if data == "restart":
         edit(chat_id, mid, T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb())
@@ -314,10 +348,14 @@ def on_callback(con, cq):
                 send(chat_id, T.NEED_SUB,
                      kb([[("📢 Подписаться на канал", CHANNEL_INVITE)],
                          [("✅ Я подписался", f"f:{prof}")]]))
+    if not answered:
+        _answer(cq["id"], answer_text)
+
+
+def _answer(cq_id, text=None):
     try:
-        tg("answerCallbackQuery", callback_query_id=cq["id"], text=answer_text,
-           show_alert=bool(answer_text))
-    except (TgError, OSError) as e:
+        tg("answerCallbackQuery", callback_query_id=cq_id, text=text, show_alert=bool(text))
+    except TgError as e:
         log.warning("answerCallbackQuery: %s", e)
 
 
@@ -364,7 +402,7 @@ def main():
     while True:
         try:
             updates = tg("getUpdates", offset=offset, timeout=50, allowed_updates=allowed)
-        except (TgError, OSError) as e:
+        except TgError as e:
             log.warning("getUpdates: %s", e)
             time.sleep(5)
             continue

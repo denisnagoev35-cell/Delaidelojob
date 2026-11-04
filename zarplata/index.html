@@ -40,6 +40,15 @@ h1 em{color:var(--y);font-style:italic;display:block}
 .r-src{font-size:12.5px;color:#8A8A8A;margin-bottom:10px!important}
 .r-note{font-size:14.5px;line-height:1.5;color:#DADADA}
 .cta{margin-top:6px}
+.step{display:flex;align-items:center;gap:10px;font-weight:800;font-size:16px;margin:0 0 10px}
+.step i{font-style:normal;flex:none;width:28px;height:28px;border-radius:50%;background:var(--y);color:#111;font-weight:900;display:flex;align-items:center;justify-content:center;font-size:14px}
+.step-exp{display:none;margin-top:16px}
+.step-exp.on{display:flex}
+.chips.hint .chip{animation:pulse 1.8s ease-in-out infinite}
+.chips.hint .chip:nth-child(2n){animation-delay:.25s}
+@keyframes pulse{0%,100%{border-color:#2A2A2A}50%{border-color:rgba(255,198,3,.75)}}
+.chip::after{content:"›";float:right;color:var(--y);font-weight:900}
+.exp .chip::after{content:none}
 .btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:58px;padding:14px 16px;border-radius:16px;text-decoration:none;font-weight:800;font-size:16.5px;text-align:center}
 .btn svg{width:22px;height:22px;flex:none}
 .btn-main{background:var(--y);color:#111;box-shadow:0 10px 30px rgba(255,198,3,.25)}
@@ -100,10 +109,13 @@ function ddGo(ev, a, g){
   <div class="top"><img src="/favicon-120.png" alt="" width="44" height="44"><div><b>ЗАРПЛАТЫ HORECA</b><span>МОСКВА И МО · ДЕЛАЙ ДЕЛО JOB</span></div></div>
 
   <h1>Сколько тебе <em>должны платить?</em></h1>
-  <p class="lead">Выбери профессию — покажем вилку за смену по вакансиям баров, кафе и кальянных Москвы и МО.</p>
+  <p class="lead">Покажем вилку за смену по вакансиям баров, кафе и кальянных Москвы и МО.</p>
 
-  <div class="chips" role="group" aria-label="Профессия" id="profs"></div>
+  <p class="step"><i>1</i> Нажми на свою профессию 👇</p>
 
+  <div class="chips hint" role="group" aria-label="Профессия" id="profs"></div>
+
+  <p class="step step-exp" id="step-exp"><i>2</i> Укажи опыт 👇</p>
   <div class="exp" role="group" aria-label="Опыт" id="exps"></div>
 
   <section class="result" id="result" aria-live="polite" hidden>
@@ -113,7 +125,7 @@ function ddGo(ev, a, g){
     <p class="r-note" id="r-note"></p>
   </section>
 
-  <div class="cta" id="cta">
+  <div class="cta" id="cta" hidden>
     <a class="btn btn-main" id="bot-btn" href="https://t.me/delaidelo24bot?start=vk_ads_bot" onclick="return ddGo(event,this,'bot_click')">
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.9 4.3 18.6 20c-.2 1-.9 1.3-1.7.8l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.2-8.3c.4-.4-.1-.6-.6-.2L6.1 13.4l-4.9-1.5c-1.1-.3-1.1-1 .2-1.6l19.1-7.4c.9-.3 1.7.2 1.4 1.4z"/></svg>
       <span id="bot-label">Полный разбор и свежие вакансии</span>
@@ -148,13 +160,13 @@ function render(){
   [].forEach.call(eb.children,function(b){b.setAttribute("aria-pressed",b.dataset.id===cur.e?"true":"false")});
   if(!cur.p)return;
   var p=P.filter(function(x){return x[0]===cur.p})[0];
-  document.getElementById("result").hidden=false; eb.classList.add("on");
+  document.getElementById("result").hidden=false; eb.classList.add("on"); pb.classList.remove("hint");
+  document.getElementById("step-exp").classList.add("on"); document.getElementById("cta").hidden=false;
   document.getElementById("r-name").textContent=p[1]+" "+p[2];
   document.getElementById("r-sum").innerHTML=p[3]+' <small>'+p[4]+'</small>';
   document.getElementById("r-src").textContent=p[5];
   document.getElementById("r-note").textContent=p[6][cur.e]||EN[cur.e];
   document.getElementById("bot-label").textContent="Получить полный разбор в боте";
-  document.getElementById("cta").classList.add("on");
 }
 render();
 </script>

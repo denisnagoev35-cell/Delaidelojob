@@ -1,0 +1,18 @@
+[Unit]
+Description=Telegram bot «Зарплаты HoReCa» (@delaidelo24bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ddbot
+WorkingDirectory=/opt/ddbot
+EnvironmentFile=/etc/ddbot.env
+ExecStart=/usr/bin/python3 /opt/ddbot/bot.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/opt/ddbot/data
+
+[Install]
+WantedBy=multi-user.target

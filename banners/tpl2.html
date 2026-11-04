@@ -1,0 +1,35 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:M;src:url(Montserrat-BlackItalic.ttf);font-weight:900;font-style:italic}
+@font-face{font-family:M;src:url(Montserrat-ExtraBoldItalic.ttf);font-weight:800;font-style:italic}
+*{box-sizing:border-box;margin:0}
+body{width:1080px;height:HEIGHTpx;background:#0B0B0B;color:#F5F5F5;font-family:M,sans-serif;overflow:hidden;position:relative}
+.bg span{position:absolute;left:-20%;width:140%;height:var(--sh);top:var(--t);transform:rotate(-14deg);
+ background:repeating-linear-gradient(0deg,#FFC603 0 3px,transparent 3px 8px,#FFC603 8px 9px,transparent 9px 17px);opacity:var(--o);
+ -webkit-mask-image:linear-gradient(90deg,transparent,#000 20%,#000 70%,transparent)}
+.glow{position:absolute;left:8%;top:TOPGLOW;width:900px;height:520px;background:radial-gradient(closest-side,rgba(255,198,3,.26),transparent)}
+.mascot{position:absolute;right:-90px;bottom:-60px;width:MSZpx;height:MSZpx;border-radius:50%;
+ background:url(mascot.png) 52% 18%/auto 118% no-repeat #FCC80F;box-shadow:0 0 0 14px rgba(255,198,3,.18),0 0 120px rgba(255,198,3,.45)}
+.wrap{position:absolute;left:72px;top:64px;right:72px}
+.logo{width:96px;height:96px;border-radius:50%;box-shadow:0 0 0 5px rgba(255,198,3,.15)}
+.t{display:inline-block}
+.brand{font-weight:900;font-style:italic;font-size:34px;letter-spacing:.02em;text-transform:uppercase;line-height:1}
+.brand b{background:#FFC603;color:#111;padding:2px 10px;border-radius:8px;margin-left:4px}
+.kick{margin-top:calc(KGAPpx + 30px);font-weight:900;font-style:italic;font-size:60px;line-height:1;text-transform:uppercase}
+.money{font-weight:900;font-style:italic;color:#FFC603;font-size:MSpx;line-height:.95;letter-spacing:-.02em;margin-top:12px;white-space:nowrap;text-shadow:0 10px 50px rgba(255,198,3,.45)}
+.money small{font-size:.5em;margin-right:.2em}
+.unit{font-weight:800;font-style:italic;font-size:38px;text-transform:uppercase;margin-top:14px;color:#E6E6E6}
+.hk{margin-top:30px;font-weight:900;font-style:italic;font-size:46px;text-transform:uppercase;color:#fff}
+.hk em{font-style:italic;color:#111;background:#FFC603;padding:2px 12px;border-radius:10px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.chip{margin-top:26px;font-style:italic;font-weight:900;font-size:30px;background:#FFC603;color:#111;padding:12px 20px;border-radius:14px;transform:rotate(-3deg);text-transform:uppercase}
+</style></head><body>
+<div class="bg"><span style="--t:6%;--sh:120px;--o:.10"></span><span style="--t:55%;--sh:170px;--o:.09"></span></div>
+<div class="glow"></div>
+<div class="mascot"></div>
+<div class="wrap">
+ <div class="brand"><span class="t">ДЕЛАЙ ДЕЛО <b>JOB</b></span></div>
+ <div class="kick"><span class="t">KICK</span></div>
+ <div class="money"><span class="t">MONEY</span></div>
+ <div class="unit"><span class="t">UNIT</span></div>
+ <div class="hk"><span class="t">А тебе <em>столько платят?</em></span></div>
+ <div style="display:CHIPD"><span class="chip t">CHIP</span></div>
+</div></body></html>

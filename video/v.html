@@ -1,0 +1,86 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:M;src:url(Montserrat-BlackItalic.ttf);font-weight:900;font-style:italic}
+@font-face{font-family:M;src:url(Montserrat-ExtraBoldItalic.ttf);font-weight:800;font-style:italic}
+@font-face{font-family:M;src:url(Montserrat-Bold.ttf);font-weight:700}
+*{box-sizing:border-box;margin:0}
+body{width:1080px;height:1920px;background:#0B0B0B;color:#F5F5F5;font-family:M,sans-serif;overflow:hidden;position:relative}
+.bg{position:absolute;inset:0}
+.bg span{position:absolute;left:-30%;width:160%;height:var(--sh);top:var(--t);transform:rotate(-14deg);
+ background:repeating-linear-gradient(0deg,#FFC603 0 3px,transparent 3px 8px,#FFC603 8px 9px,transparent 9px 17px);opacity:var(--o);
+ -webkit-mask-image:linear-gradient(90deg,transparent,#000 20%,#000 70%,transparent)}
+.glow{position:absolute;left:50%;top:44%;width:1100px;height:900px;transform:translate(-50%,-50%);background:radial-gradient(closest-side,rgba(255,198,3,.24),transparent)}
+.brand{position:absolute;left:80px;top:150px;font-weight:900;font-style:italic;font-size:44px;text-transform:uppercase}
+.brand b{background:#FFC603;color:#111;padding:2px 12px;border-radius:10px;margin-left:6px}
+.layer{position:absolute;inset:0;opacity:0}
+.hook{position:absolute;left:80px;right:80px;top:420px;font-weight:900;font-style:italic;font-size:132px;line-height:1.0;text-transform:uppercase}
+.hook em{color:#FFC603;font-style:italic;display:block}
+.mascot{position:absolute;left:50%;top:1150px;width:620px;height:620px;margin-left:-310px;border-radius:50%;
+ background:url(mascot.png) 52% 18%/auto 118% no-repeat #FCC80F;box-shadow:0 0 0 16px rgba(255,198,3,.18),0 0 140px rgba(255,198,3,.5)}
+.prof{position:absolute;left:80px;right:80px;top:620px}
+.prof .n{font-weight:900;font-style:italic;font-size:96px;text-transform:uppercase}
+.prof .m{font-weight:900;font-style:italic;color:#FFC603;font-size:170px;line-height:1;white-space:nowrap;margin-top:20px;text-shadow:0 12px 60px rgba(255,198,3,.5)}
+.prof .m small{font-size:.5em;margin-right:.2em}
+.prof .u{font-weight:800;font-style:italic;font-size:52px;text-transform:uppercase;margin-top:24px;color:#E6E6E6}
+.prof .c{display:inline-block;margin-top:40px;font-style:italic;font-weight:900;font-size:44px;background:#FFC603;color:#111;padding:14px 26px;border-radius:16px;transform:rotate(-3deg);text-transform:uppercase}
+.m2{top:1330px;left:auto;right:-60px;margin-left:0;width:520px;height:520px}
+.m3{top:930px;width:440px;height:440px;margin-left:-220px}
+.dots{position:absolute;left:80px;top:1260px;display:flex;gap:16px}
+.dots i{width:22px;height:22px;border-radius:50%;background:#333}
+.dots i.on{background:#FFC603}
+.q{position:absolute;left:80px;right:80px;top:420px;font-weight:900;font-style:italic;font-size:110px;line-height:1.02;text-transform:uppercase}
+.q em{color:#FFC603;font-style:italic}
+.card{position:absolute;left:80px;right:80px;top:900px;background:#17212B;border:2px solid #2A3A4A;border-radius:36px;padding:40px 44px;box-shadow:0 30px 70px rgba(0,0,0,.6)}
+.card .h{font-weight:700;font-size:34px;color:#8FA8BF}
+.card .l{font-weight:700;font-size:46px;margin-top:24px;display:flex;gap:20px;align-items:center}
+.card .l b{flex:none;width:60px;height:60px;border-radius:50%;background:#FFC603;color:#111;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:900}
+.cta{position:absolute;left:80px;right:80px;top:1440px;height:150px;border-radius:34px;background:#FFC603;color:#111;display:flex;align-items:center;justify-content:center;font-weight:900;font-style:italic;font-size:62px;text-transform:uppercase;box-shadow:0 20px 70px rgba(255,198,3,.45)}
+.end{position:absolute;left:80px;right:80px;top:480px;text-align:center}
+.end .t1{font-weight:900;font-style:italic;font-size:118px;line-height:1.02;text-transform:uppercase}
+.end .t1 em{color:#FFC603;font-style:italic}
+.end .t2{font-weight:800;font-style:italic;font-size:54px;margin-top:40px;color:#E6E6E6;text-transform:uppercase}
+.end .bot{display:inline-block;margin-top:60px;font-weight:900;font-style:italic;font-size:64px;color:#FFC603}
+</style></head><body>
+<div class="bg"><span style="--t:6%;--sh:160px;--o:.10" id="s1"></span><span style="--t:58%;--sh:220px;--o:.09" id="s2"></span></div>
+<div class="glow"></div>
+<div class="brand">ДЕЛАЙ ДЕЛО <b>JOB</b></div>
+
+<div class="layer" id="L1"><div class="hook" id="hook">Сколько тебе<em>должны</em><em>платить?</em></div><div class="mascot" id="mas"></div></div>
+<div class="layer" id="L2"><div class="prof"><div class="n" id="pn"></div><div class="m" id="pm"></div><div class="u" id="pu"></div><div class="c" id="pc"></div></div><div class="dots" id="dots"></div><div class="mascot m2"></div></div>
+<div class="layer" id="L3"><div class="q">А сколько <em>платят тебе?</em></div>
+ <div class="card"><div class="h">@delaidelo24bot · Зарплаты HoReCa</div>
+ <div class="l" id="c1"><b>1</b>Выбери профессию</div><div class="l" id="c2"><b>2</b>Укажи опыт</div><div class="l" id="c3"><b>3</b>Получи вилку и вакансии</div></div></div>
+<div class="layer" id="L4"><div class="end"><div class="t1">Узнай свою<br><em>зарплату</em></div><div class="t2">за 30 секунд · бесплатно</div></div>
+ <div class="mascot m3"></div><div class="cta" id="cta">Перейти в бота →</div></div>
+<script>
+var P=[["Кальянщик",6000,8000,"","за смену с % и чаевыми","Учат на месте"],
+["Бармен",1500,null,"от","за смену + % и чаевые","Можно без опыта"],
+["Официант",5000,null,"≈","за смену с чаевыми","Можно без опыта"],
+["Повар",4500,6000,"","за смену","Помощником без опыта"],
+["Хостес",6000,null,"до","за смену","Вечерние смены"]];
+var D=document.getElementById('dots'); P.forEach(()=>D.appendChild(document.createElement('i')));
+var cl=(x,a,b)=>Math.max(a,Math.min(b,x)), ease=x=>1-Math.pow(1-cl(x,0,1),3);
+var fmt=n=>Math.round(n).toLocaleString('ru-RU').replace(/ |\s/g,' ');
+function op(id,t,a,b,f){var o=cl((t-a)/f,0,1)*cl((b-t)/f,0,1);document.getElementById(id).style.opacity=o;return o}
+// timeline: L1 0-2.6, L2 2.4-10.6 (5x1.6), L3 10.4-14.2, L4 14.0-17
+window.render=function(t){
+ document.getElementById('s1').style.transform='rotate(-14deg) translateX('+(-t*18)+'px)';
+ document.getElementById('s2').style.transform='rotate(-14deg) translateX('+(t*14)+'px)';
+ op('L1',t,-1,2.6,.25);
+ var h=ease((t)/0.5); document.getElementById('hook').style.transform='translateY('+((1-h)*60)+'px) scale('+(0.94+0.06*h)+')';
+ var m=ease((t-0.4)/0.6); document.getElementById('mas').style.transform='scale('+(0.6+0.4*m)+')'; document.getElementById('mas').style.opacity=m;
+ op('L2',t,2.4,10.6,.2);
+ var i=cl(Math.floor((t-2.4)/1.64),0,4), lt=t-2.4-i*1.64, p=P[i];
+ document.getElementById('pn').textContent=p[0];
+ var k=ease(lt/0.7), a=p[1]*k, b=p[2]?p[2]*k:null;
+ document.getElementById('pm').innerHTML=(p[3]&&p[3]!=='≈'?'<small>'+p[3]+'</small>':(p[3]||''))+fmt(a)+(b?'–'+fmt(b):'')+' ₽';
+ var pm=document.getElementById('pm'); pm.style.fontSize='170px'; var fs=170; while(pm.scrollWidth>920&&fs>80){fs-=6;pm.style.fontSize=fs+'px'}
+ document.getElementById('pu').textContent=p[4]; document.getElementById('pc').textContent=p[5];
+ var s=ease(lt/0.35); document.querySelector('.prof').style.transform='translateX('+((1-s)*80)+'px)'; document.querySelector('.prof').style.opacity=s;
+ [].forEach.call(D.children,(e,j)=>e.className=j<=i?'on':'');
+ op('L3',t,10.4,14.2,.25);
+ ['c1','c2','c3'].forEach((id,j)=>{var v=ease((t-10.8-j*0.45)/0.4);var e=document.getElementById(id);e.style.opacity=v;e.style.transform='translateX('+((1-v)*60)+'px)'});
+ op('L4',t,14.0,99,.25);
+ var c=1+0.03*Math.sin((t-14)*6); document.getElementById('cta').style.transform='scale('+c+')';
+};
+render(0);
+</script></body></html>

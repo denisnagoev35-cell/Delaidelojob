@@ -35,15 +35,37 @@ class TgError(Exception):
     pass
 
 
-# Telegram доступен по IPv4; на части VPS IPv6 «висит» и каждое соединение ждёт таймаут.
-if os.environ.get("FORCE_IPV4", "1") == "1":
-    _orig_gai = socket.getaddrinfo
+# Подключение к api.telegram.org: перебираем адреса (IPv6 и IPv4) с коротким таймаутом
+# и запоминаем тот, что ответил. Так один «висящий» адрес не тормозит бота.
+CONNECT_TIMEOUT = float(os.environ.get("CONNECT_TIMEOUT", "4"))
+PREFER = os.environ.get("PREFER_IP", "")  # "4" или "6" — если нужно жёстко
+_good = {"family": None}
 
-    def _gai_v4(host, *args, **kw):
-        res = _orig_gai(host, *args, **kw)
-        v4 = [r for r in res if r[0] == socket.AF_INET]
-        return v4 or res
-    socket.getaddrinfo = _gai_v4
+
+class FastHTTPS(http.client.HTTPSConnection):
+    def connect(self):
+        infos = socket.getaddrinfo(self.host, self.port, 0, socket.SOCK_STREAM)
+        fam_pref = {"4": socket.AF_INET, "6": socket.AF_INET6}.get(PREFER) or _good["family"]
+        if fam_pref:
+            infos.sort(key=lambda i: 0 if i[0] == fam_pref else 1)
+        last = None
+        for fam, typ, proto, _, sa in infos:
+            sock = socket.socket(fam, typ, proto)
+            sock.settimeout(CONNECT_TIMEOUT)
+            try:
+                sock.connect(sa)
+            except OSError as e:
+                last = e
+                sock.close()
+                continue
+            if _good["family"] != fam:
+                log.info("connected via %s", "IPv6" if fam == socket.AF_INET6 else "IPv4")
+                _good["family"] = fam
+            sock.settimeout(self.timeout)
+            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+            return
+        raise last or OSError("no address")
+
 
 _conns = {}
 
@@ -51,7 +73,7 @@ _conns = {}
 def _conn(kind, timeout):
     c = _conns.get(kind)
     if c is None:
-        c = http.client.HTTPSConnection("api.telegram.org", timeout=timeout)
+        c = FastHTTPS("api.telegram.org", timeout=timeout)
         _conns[kind] = c
     c.timeout = timeout
     if c.sock is not None:
@@ -65,7 +87,8 @@ def tg(method, **params):
     kind = "poll" if method == "getUpdates" else "api"
     timeout = params.get("timeout", 0) + 15
     path = f"/bot{TOKEN}/{method}"
-    for attempt in (1, 2):
+    attempts = 4
+    for attempt in range(1, attempts + 1):
         c = _conn(kind, timeout)
         try:
             c.request("POST", path, body=body, headers={"Content-Type": "application/json"})
@@ -75,8 +98,10 @@ def tg(method, **params):
         except (OSError, http.client.HTTPException) as e:
             c.close()
             _conns.pop(kind, None)
-            if attempt == 2:
+            if attempt == attempts:
                 raise TgError(f"{method}: {e.__class__.__name__}: {e}")
+            log.warning("%s: %s, повтор %s", method, e.__class__.__name__, attempt)
+            time.sleep(min(attempt, 3))
     try:
         res = json.loads(raw.decode())
     except ValueError:

@@ -81,10 +81,11 @@ _tmr.push({id: "3809428", type: "pageView", start: (new Date()).getTime()});
   var f = function () {var s = d.getElementsByTagName("script")[0]; s.parentNode.insertBefore(ts, s);};
   if (w.opera == "[object Opera]") { d.addEventListener("DOMContentLoaded", f, false); } else { f(); }
 })(document, window, "tmr-code");
-function ddGoal(g){ try{ _tmr.push({type:'reachGoal', id:3809428, goal:g}); }catch(e){} try{ ym(113889494,'reachGoal',g); }catch(e){} }
+function ddGoal(g,cb){ try{ _tmr.push({type:'reachGoal', id:3809428, goal:g}); }catch(e){} var c=false; try{ if(typeof ym==='function'){ ym(113889494,'reachGoal',g,{},function(){ if(cb) cb(); }); c=true; } }catch(e){} if(!c && cb) cb(); }
 // Клик по кнопке: отправляем цель и даём счётчику время уйти до перехода в Telegram.
 function ddGo(ev, a, g){
-  ddGoal(g);
+  var ymDone = false;
+  ddGoal(g, function(){ ymDone = true; });
   if (ev && (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1)) return true;
   var href = a.href, done = false;
   function go(){ if (done) return; done = true; window.location.href = href; }
@@ -92,7 +93,7 @@ function ddGo(ev, a, g){
   (function wait(){
     var loaded = false;
     try { loaded = performance.getEntriesByType('resource').some(function(e){ return /top-fwz1\.mail\.ru\/js\/code\.js/.test(e.name) && e.responseEnd > 0; }); } catch(e){ loaded = true; }
-    if (loaded) { setTimeout(go, 350); }
+    if (loaded && ymDone) { setTimeout(go, 150); }
     else if (Date.now() - t0 > 1500) { go(); }
     else { setTimeout(wait, 100); }
   })();

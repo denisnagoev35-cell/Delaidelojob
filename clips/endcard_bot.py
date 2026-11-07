@@ -4,7 +4,7 @@ import os, sys, math
 W, H = 1080, 1920
 D = os.path.dirname(os.path.abspath(__file__)); F = D + "/tools/fonts/"
 Y = (255, 198, 3)
-VAR = {"vk_dzen": "ССЫЛКА НА БОТА — В ОПИСАНИИ", "shorts_tiktok": "НАЙДИ В ПОИСКЕ TELEGRAM"}
+VAR = {"vk_dzen": "ССЫЛКА НА БОТА — В ОПИСАНИИ", "shorts_tiktok": "НАЙДИ В ПОИСКЕ TELEGRAM", "vk_ads": "ИЩИ ССЫЛКУ В КОММЕНТАРИЯХ"}
 var, out, dur, fps = sys.argv[1], sys.argv[2], float(sys.argv[3]), 30
 os.makedirs(out, exist_ok=True)
 fBI = lambda s: ImageFont.truetype(F + "Montserrat-BlackItalic.ttf", s)

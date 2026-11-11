@@ -265,7 +265,8 @@ def result_text(prof_key, region_key, exp_key):
     p = T.PROFESSIONS[prof_key]
     note = p["exp"].get(exp_key) or T.EXP_NOTE[exp_key]
     return T.RESULT.format(emoji=p["emoji"], name=p["name"], region=T.REGIONS[region_key],
-                           range=p["range"], source=p["source"], exp_note=note)
+                           range=p.get("range_by_exp", {}).get(exp_key) or p["range"],
+                           source=p["source"], exp_note=note)
 
 
 def full_text(con, prof_key):

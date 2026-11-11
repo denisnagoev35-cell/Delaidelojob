@@ -170,5 +170,9 @@ function render(){
 }
 render();
 </script>
+<script>
+// Директ: люди с utm_source=yandex идут в бота с меткой ya_direct, остальные — как раньше (vk_ads_bot).
+(function(){try{var s=new URLSearchParams(location.search).get('utm_source');if(s==='yandex'){document.getElementById('bot-btn').href='https://t.me/delaidelo24bot?start=ya_direct';}}catch(e){}})();
+</script>
 </body>
 </html>

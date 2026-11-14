@@ -252,9 +252,19 @@ def is_subscribed(uid):
     return st in ("creator", "administrator", "member") or (st == "restricted" and m.get("is_member"))
 
 
-def professions_kb():
+# Вход в подборку для обычного пользователя — кнопкой, без команд.
+# Пока тест: кнопку видят только админы. Открыть всем — PODBOR_FOR_ALL=1 в /etc/ddbot.env.
+PODBOR_FOR_ALL = os.environ.get("PODBOR_FOR_ALL", "") == "1"
+PODBOR_BTN = ("🔎 Подобрать вакансии под меня", "pb:start")
+
+
+def podbor_allowed(uid):
+    return PODBOR_FOR_ALL or uid in ADMIN_IDS
+
+
+def professions_kb(uid=None):
     keys = list(T.PROFESSIONS)
-    rows = []
+    rows = [[PODBOR_BTN]] if uid is not None and podbor_allowed(uid) else []
     for i in range(0, len(keys), 2):
         rows.append([(f"{T.PROFESSIONS[k]['emoji']} {T.PROFESSIONS[k]['name']}", f"p:{k}")
                      for k in keys[i:i + 2]])
@@ -262,8 +272,9 @@ def professions_kb():
     return kb(rows)
 
 
-def final_kb():
-    return kb([
+def final_kb(uid=None):
+    top = [[PODBOR_BTN]] if uid is not None and podbor_allowed(uid) else []
+    return kb(top + [
         [("📢 Все вакансии в канале", CHANNEL_INVITE)],
         [("📝 Оставить анкету", T.ANKETA_URL)],
         [("🛵 Подработка курьером", T.COURIER_URL)],
@@ -302,7 +313,7 @@ def on_start(con, msg):
     source = payload if SOURCE_RE.match(payload) else None
     touch_user(con, uid, source)
     event(con, uid, "start", source or "")
-    send(msg["chat"]["id"], T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb())
+    send(msg["chat"]["id"], T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb(msg["from"]["id"]))
 
 
 def on_stats(con, msg):
@@ -342,9 +353,18 @@ def on_callback(con, cq):
         _answer(cq["id"])
         answered = True
 
-    if data.startswith("sb:") and uid in ADMIN_IDS:
+    if data.startswith("sb:") and podbor_allowed(uid):
         sub_callback(con, uid, chat_id, mid, data)
-    elif data.startswith("pb:") and uid in ADMIN_IDS:
+    elif data == "pb:start" and podbor_allowed(uid):
+        st = pb_get(con, uid)
+        if st.get("done") and st.get("prof") in T.PROFESSIONS:
+            m = send(chat_id, "…")
+            pb_show(con, uid, chat_id, m["message_id"], st)
+        else:
+            pb_set(con, uid, {})
+            send(chat_id, "🔎 <b>Подборка вакансий</b>\n\nОтветь на 5 коротких вопросов — покажу все вакансии "
+                          "из канала за неделю, которые тебе подходят.\n\nКем хочешь работать?", pb_prof_kb())
+    elif data.startswith("pb:") and podbor_allowed(uid):
         pb_callback(con, uid, chat_id, mid, data)
     elif data.startswith("pm:") and uid in ADMIN_IDS:
         _, n, city = (data.split(":") + ["", "", ""])[:3]
@@ -356,7 +376,7 @@ def on_callback(con, cq):
                 PB.set_field(con, int(n), city=PB.MOSCOW, parsed_by="manual")
                 edit(chat_id, mid, vac_card(con, int(n)))
     elif data == "restart":
-        edit(chat_id, mid, T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb())
+        edit(chat_id, mid, T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb(uid))
     elif data == "emp":
         event(con, uid, "employer")
         send(chat_id, T.EMPLOYER.format(contact=T.CONTACT, oferta=T.OFERTA_URL),
@@ -388,7 +408,7 @@ def on_callback(con, cq):
                 set_user(con, uid, subscribed=1, sub_at=int(time.time()))
                 event(con, uid, "subscribed")
             event(con, uid, "full", prof)
-            send(chat_id, full_text(con, prof), final_kb())
+            send(chat_id, full_text(con, prof), final_kb(uid))
         else:
             event(con, uid, "need_sub", prof)
             if mid and (msg.get("text") or "").startswith("🔒"):
@@ -644,7 +664,7 @@ def pb_callback(con, uid, chat_id, mid, data):
         st["prof"] = val
         pb_after(con, uid, chat_id, mid, st, "p")
     elif "prof" not in st:
-        edit(chat_id, mid, "Начнём заново: /podbor")
+        edit(chat_id, mid, "Давай начнём заново 🙂", kb([[PODBOR_BTN]]))
     elif step == "w":
         if val == "mo":
             st["wait"] = "city"
@@ -791,7 +811,7 @@ def sub_callback(con, uid, chat_id, mid, data):
         con.execute("DELETE FROM sub_queue WHERE user_id=?", (uid,))
         con.commit()
         event(con, uid, "sub_off")
-        send(chat_id, "🔕 Рассылка выключена. Включить снова — кнопкой под подборкой: /podbor",
+        send(chat_id, "🔕 Рассылка выключена. Включить снова — кнопкой «🔔» под подборкой.",
              kb([[("🔎 Открыть подборку", "sb:edit")]]))
     elif data == "sb:edit":
         r = con.execute("SELECT query FROM subs WHERE user_id=?", (uid,)).fetchone()
@@ -817,7 +837,7 @@ def notify_subscribers(con, message_id):
     if not r or not r["prof"]:
         return
     for sub in con.execute("SELECT * FROM subs WHERE active=1").fetchall():
-        if sub["user_id"] not in ADMIN_IDS:  # тест: рассылка только админам
+        if not podbor_allowed(sub["user_id"]):  # тест: рассылка только админам
             continue
         if PB.compare(r, json.loads(sub["query"])):
             continue
@@ -904,7 +924,8 @@ def subs_tick(con):
             elif r["ping_at"] < time.time() - PING_WAIT_DAYS * 86400:
                 con.execute("UPDATE subs SET active=0 WHERE user_id=?", (r["user_id"],))
                 con.commit()
-                send(r["user_id"], "🔕 Выключил рассылку вакансий. Вернуть — /podbor")
+                send(r["user_id"], "🔕 Выключил рассылку вакансий. Вернуть — кнопкой «🔔» под подборкой.",
+                     kb([[PODBOR_BTN]]))
 
 
 def on_testrass(con, msg):
@@ -912,7 +933,7 @@ def on_testrass(con, msg):
     uid, chat = msg["from"]["id"], msg["chat"]["id"]
     sub = con.execute("SELECT * FROM subs WHERE user_id=? AND active=1", (uid,)).fetchone()
     if not sub:
-        send(chat, "Сначала подпишись: /podbor → кнопка «🔔 Присылать новые вакансии под этот запрос».")
+        send(chat, "Сначала подпишись: /start → «🔎 Подобрать вакансии под меня» → «🔔 Присылать…».")
         return
     q = json.loads(sub["query"])
     exact, near = PB.match(con, q, days=30)
@@ -976,11 +997,11 @@ def handle(con, upd):
         on_stats(con, msg)
     elif msg["from"]["id"] in ADMIN_IDS and text.startswith("/"):
         on_admin(con, msg, text)
-    elif msg["from"]["id"] in ADMIN_IDS and pb_get(con, msg["from"]["id"]).get("wait") == "city":
+    elif podbor_allowed(msg["from"]["id"]) and pb_get(con, msg["from"]["id"]).get("wait") == "city":
         pb_city_text(con, msg, text)
     else:
         touch_user(con, msg["from"]["id"])
-        send(msg["chat"]["id"], T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb())
+        send(msg["chat"]["id"], T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb(msg["from"]["id"]))
 
 
 def main():

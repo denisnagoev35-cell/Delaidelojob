@@ -404,7 +404,7 @@ def on_callback(con, cq):
                 PB.set_field(con, int(n), asked=2)
                 edit(chat_id, mid, f"Пост №{n}: пропущен, в подборку по месту не попадёт.")
             else:
-                PB.set_field(con, int(n), city=PB.MOSCOW, parsed_by="manual")
+                PB.set_field(con, int(n), manual=True, city=PB.MOSCOW)
                 edit(chat_id, mid, vac_card(con, int(n)))
     elif data == "restart":
         edit(chat_id, mid, T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb(uid))
@@ -462,16 +462,16 @@ def post_tags(text):
     return sorted({t.lower() for t in HASHTAG_RE.findall(text or "")})
 
 
-def analyze_post(con, message_id, notify=False, use_gpt=True):
+def analyze_post(con, message_id, notify=False, use_gpt=True, force=False):
     row = con.execute("SELECT * FROM posts WHERE message_id=?", (message_id,)).fetchone()
-    if not row or not PB.needs_parse(con, message_id, row["text"]):
+    if not row or not (force or PB.needs_parse(con, message_id, row["text"])):
         return None
     if not row["text"].strip():
         return None
     fields, by = PB.parse_post(row["text"], post_tags(row["text"]), PROF_TAGS, use_gpt=use_gpt)
     PB.store(con, message_id, row["date"], row["text"], fields, by)
     r = PB.get_vac(con, message_id)
-    if notify and fields.get("prof") and r and not r["asked"]:
+    if notify and fields.get("prof") and fields.get("prof") != "courier" and r and not r["asked"]:
         missing = [n for f, n in (("city", "место"), ("unit", "ставку")) if not fields.get(f)]
         if missing:
             ask_admins(con, message_id, missing)
@@ -531,7 +531,7 @@ def on_admin(con, msg, text):
         if not city:
             send(chat, "Не знаю такой город. Пиши как на сайте: Химки, Красногорск, Москва.")
             return
-        PB.set_field(con, int(args[0]), city=city, parsed_by="manual")
+        PB.set_field(con, int(args[0]), manual=True, city=city)
         send(chat, vac_card(con, int(args[0])))
     elif cmd == "/stavka" and len(args) >= 2 and args[0].isdigit():
         nums = [int(x) for x in re.findall(r"\d+", args[1])]
@@ -540,32 +540,30 @@ def on_admin(con, msg, text):
             send(chat, "Формат: /stavka 65 4000-6000 смена")
             return
         PB.set_field(con, int(args[0]), sal_min=nums[0], sal_max=nums[1] if len(nums) > 1 else None, unit=unit,
-                     parsed_by="manual")
+                     manual=True)
         send(chat, vac_card(con, int(args[0])))
     elif cmd == "/reparse":
         days = int(args[0]) if args and args[0].isdigit() else 14
         since = int(time.time()) - days * 86400
-        # посты, поправленные вручную (/mesto, /stavka), не трогаем
         ids = [r["message_id"] for r in con.execute(
-            "SELECT p.message_id FROM posts p LEFT JOIN vac v ON v.message_id=p.message_id "
-            "WHERE p.date>=? AND (v.parsed_by IS NULL OR v.parsed_by!='manual') ORDER BY p.date",
-            (since,)).fetchall()]
-        send(chat, f"Разбираю {len(ids)} постов за {days} дн… (поправленные вручную не трогаю)")
-        con.execute("DELETE FROM vac WHERE message_id IN (%s)" % ",".join("?" * len(ids)), ids)
-        con.commit()
+            "SELECT message_id FROM posts WHERE date>=? ORDER BY date", (since,)).fetchall()]
+        send(chat, f"Разбираю {len(ids)} постов за {days} дн… (ручные правки сохраняю)")
         ok = gpt = media = 0
-        no_city, no_sal, no_prof = [], [], []
+        no_city, no_sal, not_vac, digests = [], [], [], []
         for n in ids:
             row = con.execute("SELECT text FROM posts WHERE message_id=?", (n,)).fetchone()
             if not row or not (row["text"] or "").strip():
                 media += 1  # фото/видео без текста
                 continue
-            f = analyze_post(con, n) or {}
+            f = analyze_post(con, n, force=True) or {}
             r = PB.get_vac(con, n)
             if r and r["parsed_by"] == "gpt":
                 gpt += 1
+            if f.get("kind") == "digest":
+                digests.append(n)
+                continue
             if not f.get("prof"):
-                no_prof.append(n)  # промо, анонсы, дайджесты
+                not_vac.append(n)
                 continue
             if not f.get("city"):
                 no_city.append(n)
@@ -573,10 +571,13 @@ def on_admin(con, msg, text):
                 no_sal.append(n)
             if f.get("city") and f.get("unit"):
                 ok += 1
-        lines = [f"✅ Готово: полностью разобрано {ok} из {len(ids) - media} постов с текстом "
-                 f"(через YandexGPT: {gpt}; без текста пропущено: {media})."]
-        if no_prof:
-            lines.append(f"Не вакансии (промо, анонсы): {', '.join(map(str, no_prof))}")
+        vac_total = len(ids) - media - len(not_vac) - len(digests)
+        lines = [f"✅ Готово: вакансий {vac_total}, из них полностью разобрано {ok} "
+                 f"(через YandexGPT: {gpt}; фото/видео без текста: {media})."]
+        if digests:
+            lines.append(f"Подборки (в поиск не идут): {', '.join(map(str, digests))}")
+        if not_vac:
+            lines.append(f"Не вакансии (промо, анонсы): {', '.join(map(str, not_vac))}")
         if no_city:
             lines.append(f"Нет места: {', '.join(map(str, no_city))}")
         if no_sal:
@@ -656,7 +657,25 @@ def sub_state(con, uid, st):
     return "same" if json.loads(r["query"]) == pb_query(st) else "other"
 
 
+COURIER_TEXT = (
+    "🛵 <b>Курьер в Яндекс Еду</b>\n\n"
+    "Курьеров подключаем напрямую по партнёрской программе Яндекс Еды — это наше агентство «Делай Дело».\n\n"
+    "• работа в любом районе Москвы и МО\n"
+    "• пешком, на велосипеде или на авто\n"
+    "• график выбираешь сам — подходит и как подработка\n\n"
+    "Условия, доход и заявка — по кнопке 👇"
+)
+
+
+def pb_courier(chat_id, mid):
+    edit(chat_id, mid, COURIER_TEXT, kb([[("🛵 Стать курьером", T.COURIER_URL.replace("campaign=courier", "campaign=courier_podbor"))],
+                                         [("🆕 Другая профессия", "pb:new")]]))
+
+
 def pb_show(con, uid, chat_id, mid, st):
+    if st.get("prof") == "courier":
+        pb_courier(chat_id, mid)
+        return
     text = pb_result(con, st)
     state = sub_state(con, uid, st)
     if state == "same":
@@ -691,6 +710,9 @@ def pb_callback(con, uid, chat_id, mid, data):
     elif step == "new":
         st = {}
         edit(chat_id, mid, "🔎 <b>Подборка вакансий</b> (тест)\n\nКем хочешь работать?", pb_prof_kb())
+    elif step == "p" and val == "courier":
+        st = {"prof": "courier"}
+        pb_courier(chat_id, mid)
     elif step == "p" and val in T.PROFESSIONS:
         st["prof"] = val
         pb_after(con, uid, chat_id, mid, st, "p")
@@ -865,7 +887,7 @@ def sub_callback(con, uid, chat_id, mid, data):
 def notify_subscribers(con, message_id):
     r = con.execute("SELECT v.*, p.text FROM vac v JOIN posts p ON p.message_id=v.message_id "
                     "WHERE v.message_id=? AND p.closed=0", (message_id,)).fetchone()
-    if not r or not r["prof"]:
+    if not r or not r["prof"] or (r["kind"] or "vacancy") != "vacancy":
         return
     for sub in con.execute("SELECT * FROM subs WHERE active=1").fetchall():
         if not podbor_allowed(sub["user_id"]):  # тест: рассылка только админам

@@ -77,15 +77,36 @@ ALIASES = [(re.compile(r"\bжелезнодорожн", re.I), "Балашиха
            (re.compile(r"\bсколков|\bновая москва|\bкоммунарк|\bзеленоград", re.I), MOSCOW)]
 
 
-def find_city(text):
+# «Химкинский бульвар», «ул. Подольских курсантов» — это улицы, а не города
+STREET_BEFORE = re.compile(r"(?:ул\.?|улиц\w*|бульвар\w*|б-р|проспект\w*|пр-т|пр\.|шоссе|переул\w*|пер\.|"
+                           r"площад\w*|пл\.|проезд\w*|набережн\w*|наб\.|тупик\w*)\s*$", re.I)
+STREET_AFTER = re.compile(r"^\s*(?:улиц\w*|ул\.|бульвар\w*|шоссе|проспект\w*|переул\w*|проезд\w*|курсант\w*|"
+                          r"набережн\w*|площад\w*|тупик\w*)", re.I)
+
+
+def find_cities(text):
+    """Все города МО из текста, по порядку; названия улиц пропускаем."""
     t = _norm(text)
+    found = []
     for rx, name in ALIASES:
-        if rx.search(t):
-            return name
+        if rx.search(t) and name not in found:
+            found.append(name)
+    hits = []
     for name, rx in CITY_RES:
-        if rx.search(t):
-            return name
-    return None
+        for m in rx.finditer(t):
+            if STREET_BEFORE.search(t[max(0, m.start() - 15):m.start()]) or STREET_AFTER.match(t[m.end():m.end() + 15]):
+                continue
+            hits.append((m.start(), name))
+            break
+    for _, name in sorted(hits):
+        if name not in found:
+            found.append(name)
+    return found
+
+
+def find_city(text):
+    c = find_cities(text)
+    return c[0] if c else None
 
 
 def canon_city(name):
@@ -117,6 +138,25 @@ PROF_WORDS = [
     ("staff", r"посудомо|уборщ|клининг|хозперсонал|мойщ"),
     ("courier", r"курьер|доставк"),
 ]
+
+
+EXTRA_TAGS = {"#км": "kalyan", "#пкм": "kalyan", "#кальянный": "kalyan", "#админ": "hostess",
+              "#администратор": "hostess", "#хостесс": "hostess"}
+
+
+def find_profs(text, tags, prof_tags, use_words=True):
+    """Все профессии поста: по хэштегам; если хэштегов нет — по словам в тексте."""
+    tag_map = {v: k for k, v in prof_tags.items()}
+    tag_map.update({k: v for k, v in EXTRA_TAGS.items() if v in prof_tags})
+    out = []
+    for t in tags:
+        k = tag_map.get(t)
+        if k and k not in out:
+            out.append(k)
+    if out or not use_words:
+        return out
+    p = find_prof(text, [], prof_tags)
+    return [p] if p else []
 
 
 def find_prof(text, tags, prof_tags):
@@ -245,7 +285,7 @@ def parse_schedule(text):
 
 
 def parse_noexp(text):
-    t = _norm(text)
+    t = _norm(re.sub(r"(?i)опыт\w*\s+(?:работы\s+)?(?:приветствуется|будет плюсом|желател\w*)", "", text))
     if re.search(r"без опыта|#безопыта|обуча|обучим|научим|с нуля|стажир", t):
         return 1
     if re.search(r"опыт (?:работы )?от|опыт обязател|только с опытом|требуется опыт|опыт работы (?:не менее|от)", t):
@@ -263,13 +303,30 @@ WANT_SCHEDULE = {
 }
 
 
+BONUS_RE = re.compile(r"%|процент|чаев|\bчай\b|\bчай\s*\d|бонус|премии|премия", re.I)
+
+
+def parse_kind(text, tags, prof_keys):
+    """vacancy | digest (подборка нескольких вакансий) | other (промо, анонс)."""
+    t = _norm(text)
+    if re.search(r"вакансии недели|подборка вакансий|дайджест", t):
+        return "digest"
+    if len(find_profs("", tags, prof_keys, use_words=False)) >= 4:
+        return "digest"
+    return "vacancy"
+
+
 def parse_rules(text, tags, prof_keys):
-    out = {"prof": find_prof(text, tags, prof_keys)}
-    city = find_city(text)
+    profs = find_profs(text, tags, prof_keys)
+    out = {"profs": profs, "prof": profs[0] if profs else None}
+    cities = find_cities(text)
     metro = METRO_RE.search(text)
-    if not city and (metro or MOSCOW_RE.search(text)):
-        city = MOSCOW
-    out["city"] = city
+    if (metro or MOSCOW_RE.search(text)) and MOSCOW not in cities:
+        cities.insert(0, MOSCOW) if metro else cities.append(MOSCOW)
+    out["cities"] = cities
+    out["city"] = cities[0] if cities else None
+    out["bonus"] = 1 if BONUS_RE.search(text) else 0
+    out["kind"] = parse_kind(text, tags, prof_keys)
     out["metro"] = clean_metro(metro.group(1)) if metro else None
     out.update(parse_salary(text) or {"sal_min": None, "sal_max": None, "unit": None})
     out["schedule"] = parse_schedule(text)
@@ -292,22 +349,27 @@ def strip_contacts(text):
 
 GPT_SYSTEM = (
     "Ты разбираешь вакансии из HoReCa (Москва и Московская область). Ответь ТОЛЬКО JSON без пояснений:\n"
-    '{"profession": один из [%s] или null,\n'
-    ' "city": "Москва" или название города Московской области в именительном падеже, или null,\n'
+    '{"kind": "vacancy" (одна вакансия, даже на несколько должностей) | "digest" (подборка разных вакансий) '
+    '| "other" (реклама, анонс, не вакансия),\n'
+    ' "professions": список из [%s] — все должности, которые ищут в этом посте,\n'
+    ' "cities": список: "Москва" и/или города Московской области в именительном падеже — все места работы,\n'
     ' "metro": станция метро/МЦК/МЦД или null,\n'
     ' "salary_min": число в рублях или null, "salary_max": число в рублях или null,\n'
     ' "salary_unit": "shift" (за смену/выход) | "hour" | "month" | null,\n'
+    ' "bonus": true если кроме ставки есть процент, чаевые или бонусы, иначе false,\n'
     ' "schedule": "2/2" | "3/3" | "5/2" | "shifts" (другой сменный) | "flexible" (гибкий, смены выбираешь сам) '
     '| "parttime" (подработка, разовые смены) | null,\n'
-    ' "no_experience": true если берут без опыта / обучают, false если опыт обязателен, иначе null,\n'
+    ' "no_experience": true если берут без опыта / обучают, false если опыт строго обязателен, '
+    'иначе null («опыт приветствуется» — null),\n'
     ' "title": название заведения или сети как в тексте (без «требуется», «ищем», приветствий, эмодзи, '
     'обычными буквами, не капсом), до 40 символов; если названия нет — null}\n'
     "Правила: «6-8 тыс.» = 6000 и 8000; «4500 т.р» = 4500; «от 130 тысяч в месяц» = salary_min 130000, month. "
     "hostess — это и хостес, и администратор зала/заведения. "
-    "В каждом поле — ОДНО значение (если графиков несколько — первый). Чаевые и проценты не прибавляй. "
+    "Ставка — фиксированная часть, чаевые и проценты к ней не прибавляй (для них поле bonus). "
+    "В полях кроме списков — ОДНО значение (если графиков несколько — первый). "
     "Город определяй по любым подсказкам: адрес, улица, район, метро, МЦК, МЦД, торговый центр, известное место "
     "(улицы, районы и станции Москвы → «Москва»; Сколково, Новая Москва → «Москва»; Железнодорожный → «Балашиха»). "
-    "Если в тексте только название заведения без адреса — city null. Ничего не выдумывай: нет данных — null."
+    "Если в тексте только название заведения без адреса — cities пустой. Ничего не выдумывай: нет данных — null."
 )
 
 
@@ -316,7 +378,7 @@ def gpt_parse(text, prof_keys):
         return None
     body = {
         "modelUri": f"gpt://{YC_FOLDER}/{YC_MODEL}",
-        "completionOptions": {"stream": False, "temperature": 0, "maxTokens": "300"},
+        "completionOptions": {"stream": False, "temperature": 0, "maxTokens": "400"},
         "messages": [
             {"role": "system", "text": GPT_SYSTEM % ", ".join(f'"{k}"' for k in prof_keys)},
             {"role": "user", "text": strip_contacts(text)[:3500]},
@@ -396,14 +458,26 @@ def from_gpt(g, prof_keys):
     if not isinstance(g, dict):
         return {}
     out = {}
-    if g.get("profession") in prof_keys:
-        out["prof"] = g["profession"]
-    city = canon_city(g.get("city") or "")
-    if city:
-        out["city"] = city
+    if g.get("kind") in ("vacancy", "digest", "other"):
+        out["kind"] = g["kind"]
+    profs = g.get("professions")
+    if not isinstance(profs, list):
+        profs = [g.get("profession")] if g.get("profession") else []
+    profs = [p for p in dict.fromkeys(str(x) for x in profs) if p in prof_keys]
+    if profs:
+        out["profs"], out["prof"] = profs, profs[0]
+    cities = g.get("cities")
+    if not isinstance(cities, list):
+        cities = [g.get("city")] if g.get("city") else []
+    cities = [c for c in dict.fromkeys(canon_city(str(x)) for x in cities) if c]
     if g.get("metro"):
         out["metro"] = clean_metro(str(g["metro"]))
-        out.setdefault("city", MOSCOW)
+        if MOSCOW not in cities:
+            cities.insert(0, MOSCOW)
+    if cities:
+        out["cities"], out["city"] = cities, cities[0]
+    if isinstance(g.get("bonus"), bool):
+        out["bonus"] = 1 if g["bonus"] else 0
     unit = g.get("salary_unit") if g.get("salary_unit") in LIMITS else None
     lo, hi = _int(g.get("salary_min")), _int(g.get("salary_max"))
     if unit and (lo or hi):
@@ -422,7 +496,9 @@ def from_gpt(g, prof_keys):
 
 # ---------- база ----------
 
-FIELDS = ("prof", "city", "metro", "sal_min", "sal_max", "unit", "schedule", "noexp", "title")
+FIELDS = ("prof", "profs", "city", "cities", "metro", "sal_min", "sal_max", "unit", "schedule", "noexp",
+          "title", "bonus", "kind")
+NEW_COLS = {"title": "TEXT", "profs": "TEXT", "cities": "TEXT", "bonus": "INTEGER", "kind": "TEXT", "manual": "TEXT"}
 
 
 def db_init(con):
@@ -433,8 +509,9 @@ def db_init(con):
       shift_eq INTEGER, schedule TEXT, noexp INTEGER, parsed_by TEXT, asked INTEGER DEFAULT 0);
     """)
     cols = {r[1] for r in con.execute("PRAGMA table_info(vac)")}
-    if "title" not in cols:
-        con.execute("ALTER TABLE vac ADD COLUMN title TEXT")
+    for c, typ in NEW_COLS.items():
+        if c not in cols:
+            con.execute(f"ALTER TABLE vac ADD COLUMN {c} {typ}")
     con.commit()
 
 
@@ -443,32 +520,50 @@ def parse_post(text, tags, prof_keys, use_gpt=True):
     rules = parse_rules(text, tags, prof_keys)
     raw = gpt_parse(text, prof_keys) if use_gpt else None
     g = from_gpt(raw, prof_keys)
-    tag_prof = find_prof("", tags, prof_keys)  # профессия только по хэштегу
-    if raw is not None and not tag_prof and not g.get("prof"):
-        # нет хэштега профессии и нейросеть не видит вакансию — это не вакансия (промо, анонс)
-        rules["prof"] = None
     out = {}
     for f in FIELDS:
-        out[f] = g.get(f) if g.get(f) is not None else rules.get(f)
-    # профессию по хэштегу считаем надёжнее нейросети
-    if rules.get("prof") and any(t.startswith("#") for t in tags):
-        out["prof"] = rules["prof"]
+        out[f] = g.get(f) if g.get(f) not in (None, []) else rules.get(f)
+    tag_profs = find_profs("", tags, prof_keys, use_words=False)
+    if tag_profs:
+        out["profs"] = tag_profs          # хэштеги надёжнее нейросети
+    elif raw is not None and not g.get("profs"):
+        out["profs"] = []                 # нет хэштега, нейросеть вакансии не видит
+    if rules["kind"] == "digest" and out.get("kind") != "other":
+        out["kind"] = "digest"
+    if out.get("kind") in ("digest", "other"):
+        out["profs"] = []                 # подборки и промо в поиск не берём
+    out["prof"] = out["profs"][0] if out.get("profs") else None
+    out["city"] = out["cities"][0] if out.get("cities") else None
     by = "gpt" if g else "rules"
     return out, by
 
 
+def _join(v, sep):
+    if isinstance(v, (list, tuple)):
+        return sep + sep.join(v) + sep if v else None
+    return v
+
+
 def store(con, message_id, date, text, fields, by):
-    eq = shift_equiv(fields.get("sal_min"), fields.get("sal_max"), fields.get("unit"))
-    con.execute(
-        "INSERT INTO vac(message_id, date, hash, prof, city, metro, sal_min, sal_max, unit, shift_eq, "
-        "schedule, noexp, parsed_by, title) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-        "ON CONFLICT(message_id) DO UPDATE SET hash=excluded.hash, prof=excluded.prof, city=excluded.city, "
-        "metro=excluded.metro, sal_min=excluded.sal_min, sal_max=excluded.sal_max, unit=excluded.unit, "
-        "shift_eq=excluded.shift_eq, schedule=excluded.schedule, noexp=excluded.noexp, "
-        "parsed_by=excluded.parsed_by, title=excluded.title",
-        (message_id, date, text_hash(text), fields.get("prof"), fields.get("city"), fields.get("metro"),
-         fields.get("sal_min"), fields.get("sal_max"), fields.get("unit"), eq, fields.get("schedule"),
-         fields.get("noexp"), by, fields.get("title")))
+    old = get_vac(con, message_id)
+    manual = json.loads(old["manual"]) if old and old["manual"] else {}
+    f = dict(fields)
+    f.update(manual)  # ручные правки (/mesto, /stavka) переживают правку поста и /reparse
+    if "city" in manual:
+        f["cities"] = [manual["city"]]
+    eq = shift_equiv(f.get("sal_min"), f.get("sal_max"), f.get("unit"))
+    vals = {
+        "date": date, "hash": text_hash(text), "prof": (f.get("profs") or [None])[0] if f.get("profs") else f.get("prof"),
+        "profs": _join(f.get("profs") or [], " "), "city": (f.get("cities") or [None])[0] if f.get("cities") else f.get("city"),
+        "cities": _join(f.get("cities") or [], "|"), "metro": f.get("metro"), "sal_min": f.get("sal_min"),
+        "sal_max": f.get("sal_max"), "unit": f.get("unit"), "shift_eq": eq, "schedule": f.get("schedule"),
+        "noexp": f.get("noexp"), "parsed_by": "manual" if manual else by, "title": f.get("title"),
+        "bonus": f.get("bonus"), "kind": f.get("kind"), "manual": json.dumps(manual, ensure_ascii=False) if manual else None,
+    }
+    cols = ", ".join(vals)
+    con.execute(f"INSERT INTO vac(message_id, {cols}) VALUES(?{', ?' * len(vals)}) "
+                f"ON CONFLICT(message_id) DO UPDATE SET " + ", ".join(f"{k}=excluded.{k}" for k in vals),
+                (message_id, *vals.values()))
     con.commit()
 
 
@@ -485,14 +580,32 @@ def get_vac(con, message_id):
     return con.execute("SELECT * FROM vac WHERE message_id=?", (message_id,)).fetchone()
 
 
-def set_field(con, message_id, **kw):
+def set_field(con, message_id, manual=False, **kw):
+    """Поправить поля вакансии. manual=True — запомнить как ручную правку (не затрётся при переразборе)."""
+    if "city" in kw:
+        kw["cities"] = _join([kw["city"]], "|") if kw["city"] else None
     for k, v in kw.items():
         con.execute(f"UPDATE vac SET {k}=? WHERE message_id=?", (v, message_id))
     r = get_vac(con, message_id)
     if r:
         con.execute("UPDATE vac SET shift_eq=? WHERE message_id=?",
                     (shift_equiv(r["sal_min"], r["sal_max"], r["unit"]), message_id))
+        if manual:
+            m = json.loads(r["manual"]) if r["manual"] else {}
+            m.update({k: v for k, v in kw.items() if k in ("city", "sal_min", "sal_max", "unit", "metro")})
+            con.execute("UPDATE vac SET manual=?, parsed_by='manual' WHERE message_id=?",
+                        (json.dumps(m, ensure_ascii=False), message_id))
     con.commit()
+
+
+def row_profs(r):
+    p = (r["profs"] or "").split() if "profs" in r.keys() else []
+    return p or ([r["prof"]] if r["prof"] else [])
+
+
+def row_cities(r):
+    c = [x for x in (r["cities"] or "").split("|") if x] if "cities" in r.keys() else []
+    return c or ([r["city"]] if r["city"] else [])
 
 
 # ---------- показ ----------
@@ -512,17 +625,28 @@ def salary_str(r):
         s = f"{money(lo)}–{money(hi)}"
     elif lo or hi:
         s = money(lo or hi) if lo == hi else (f"от {money(lo)}" if lo else f"до {money(hi)}")
-    return f"{s} {UNIT_TXT.get(u, '₽')}"
+    s = f"{s} {UNIT_TXT.get(u, '₽')}"
+    if "bonus" in r.keys() and r["bonus"]:
+        s += " + % и чай"
+    return s
 
 
 def place_str(r):
-    if r["city"] == MOSCOW and r["metro"]:
-        return f"м. {clean_metro(r['metro']) or r['metro']}"
-    return r["city"] or "место не указано"
+    parts = []
+    for c in row_cities(r):
+        if c == MOSCOW and r["metro"]:
+            parts.append(f"м. {clean_metro(r['metro']) or r['metro']}")
+        else:
+            parts.append(c)
+    return ", ".join(parts[:3]) or "место не указано"
 
 
 def describe(r, prof_names):
-    parts = [prof_names.get(r["prof"], r["prof"] or "профессия ?"), place_str(r), salary_str(r)]
+    profs = row_profs(r)
+    kind = r["kind"] if "kind" in r.keys() else None
+    if kind in ("digest", "other"):
+        return {"digest": "подборка вакансий — в поиск не идёт", "other": "не вакансия — в поиск не идёт"}[kind]
+    parts = [" + ".join(prof_names.get(p, p) for p in profs) or "профессия ?", place_str(r), salary_str(r)]
     if r["schedule"]:
         parts.append(SCHEDULES.get(r["schedule"], r["schedule"]))
     if r["noexp"] == 1:
@@ -537,19 +661,22 @@ def describe(r, prof_names):
 def compare(r, q):
     """Чем вакансия r не совпадает с запросом q (пустой список — подходит точно)."""
     diffs = []
-    if r["prof"] != q.get("prof"):
+    if q.get("prof") not in row_profs(r):
         return ["другая профессия"]
     place = q.get("place", "any")
-    if place != "any" and not r["city"]:
+    cities = row_cities(r)
+    if place != "any" and not cities:
         diffs.append("место не указано")
-    elif place == "msk" and r["city"] != MOSCOW:
+    elif place == "msk" and MOSCOW not in cities:
         diffs.append("не Москва")
-    elif place not in ("any", "msk") and r["city"] != place:
+    elif place not in ("any", "msk") and place not in cities:
         diffs.append("другое место")
     want = q.get("salary") or 0
+    bonus = "bonus" in r.keys() and r["bonus"]
     if want and r["shift_eq"] is None:
         diffs.append("ставка не указана")
-    elif want and r["shift_eq"] < want:
+    elif want and r["shift_eq"] < want and not (bonus and r["shift_eq"] >= want * 0.5):
+        # со ставкой + % и чаевыми фикс бывает вдвое ниже итога — такие не отсекаем
         diffs.append("ставка ниже")
     if q.get("exp") == "none" and r["noexp"] == 0:
         diffs.append("нужен опыт")
@@ -559,15 +686,32 @@ def compare(r, q):
     return diffs
 
 
+def dup_key(r):
+    title = _norm(r["title"] or "") if "title" in r.keys() else ""
+    if not title:  # первая содержательная строка поста
+        for line in re.sub(r"#\S+", "", r["text"] or "").splitlines():
+            line = re.split(r"[,|•·—–]", line)[0]
+            if clean_title(line):
+                title = _norm(line)
+                break
+    return (re.sub(r"[^а-яa-z0-9]", "", title), r["sal_min"], r["sal_max"], "|".join(row_cities(r)))
+
+
 def match(con, q, days=7):
     """q: prof, place ('msk' | 'any' | имя города), exp, salary (за смену или 0), schedule ('any' или код).
     Возвращает (точные, ближайшие с пометкой «чем отличается»)."""
     since = int(time.time()) - days * 86400
     rows = con.execute(
         "SELECT v.*, p.text FROM vac v JOIN posts p ON p.message_id=v.message_id "
-        "WHERE p.closed=0 AND v.date>=? AND v.prof=? ORDER BY v.date DESC", (since, q["prof"])).fetchall()
-    exact, near = [], []
+        "WHERE p.closed=0 AND v.date>=? AND (v.prof=? OR v.profs LIKE ?) "
+        "AND COALESCE(v.kind, 'vacancy')='vacancy' ORDER BY v.date DESC",
+        (since, q["prof"], f"% {q['prof']} %")).fetchall()
+    exact, near, seen = [], [], set()
     for r in rows:
+        key = dup_key(r)
+        if key in seen:
+            continue  # повтор той же вакансии — оставляем самый свежий пост
+        seen.add(key)
         diffs = compare(r, q)
         (exact if not diffs else near).append((r, diffs))
     # новичкам первыми — те, где явно берут без опыта

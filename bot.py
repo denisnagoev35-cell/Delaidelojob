@@ -159,6 +159,14 @@ def db_connect(path=None):
     """)
     con.commit()
     PB.db_init(con)
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS subs(
+      user_id INTEGER PRIMARY KEY, query TEXT, active INTEGER DEFAULT 1, created INTEGER,
+      day TEXT, sent_today INTEGER DEFAULT 0, ping_at INTEGER);
+    CREATE TABLE IF NOT EXISTS sub_queue(user_id INTEGER, message_id INTEGER, ts INTEGER,
+      PRIMARY KEY(user_id, message_id));
+    """)
+    con.commit()
     return con
 
 
@@ -334,7 +342,9 @@ def on_callback(con, cq):
         _answer(cq["id"])
         answered = True
 
-    if data.startswith("pb:") and uid in ADMIN_IDS:
+    if data.startswith("sb:") and uid in ADMIN_IDS:
+        sub_callback(con, uid, chat_id, mid, data)
+    elif data.startswith("pb:") and uid in ADMIN_IDS:
         pb_callback(con, uid, chat_id, mid, data)
     elif data.startswith("pm:") and uid in ADMIN_IDS:
         _, n, city = (data.split(":") + ["", "", ""])[:3]
@@ -454,6 +464,15 @@ def on_admin(con, msg, text):
         else:
             pb_set(con, uid, {})
             send(chat, "🔎 <b>Подборка вакансий</b> (тест)\n\nКем хочешь работать?", pb_prof_kb())
+    elif cmd == "/testrass":
+        on_testrass(con, msg)
+    elif cmd == "/rass":
+        rows = con.execute("SELECT user_id, query, active FROM subs").fetchall()
+        q = con.execute("SELECT COUNT(*) c FROM sub_queue").fetchone()["c"]
+        lines = [f"🔔 Подписок: {sum(r['active'] for r in rows)} активных из {len(rows)}; в очереди: {q}"]
+        lines += [f"• {r['user_id']}: {html.escape(query_title(json.loads(r['query'])))}"
+                  f"{'' if r['active'] else ' (выкл.)'}" for r in rows[:20]]
+        send(chat, "\n".join(lines))
     elif cmd == "/vac" and args and args[0].isdigit():
         send(chat, vac_card(con, int(args[0])))
     elif cmd == "/mesto" and len(args) >= 2 and args[0].isdigit():
@@ -514,7 +533,8 @@ def on_admin(con, msg, text):
         lines.append("Посмотреть пост: /vac 65 · поправить: /mesto 65 Химки, /stavka 65 4000-6000 смена")
         send(chat, "\n".join(lines))
     else:
-        send(chat, "Команды подборки: /podbor · /reparse · /vac N · /mesto N Город · /stavka N 4000-6000 смена")
+        send(chat, "Команды: /podbor · /testrass · /rass · /reparse · /vac N · /mesto N Город · "
+                   "/stavka N 4000-6000 смена")
 
 
 def pb_get(con, uid):
@@ -564,8 +584,13 @@ def pb_q_sched(chat_id, mid):
          kb([[(n, f"pb:g:{k}")] for n, k in PB_SCHED]))
 
 
-def pb_result_kb():
+def pb_result_kb(sub_state="none"):
+    """sub_state: none — не подписан; same — подписан на этот запрос; other — подписан на другой."""
+    bell = {"none": ("🔔 Присылать новые вакансии под этот запрос", "sb:on"),
+            "same": ("🔕 Отписаться от рассылки", "sb:off"),
+            "other": ("🔔 Присылать по этому запросу (вместо старого)", "sb:on")}[sub_state]
     return kb([
+        [bell],
         [("📍 Место", "pb:c:w"), ("💰 Ставка", "pb:c:s")],
         [("🕒 График", "pb:c:g"), ("🧑‍🍳 Опыт", "pb:c:e")],
         [("🆕 Новый поиск", "pb:new")],
@@ -573,8 +598,19 @@ def pb_result_kb():
     ])
 
 
+def sub_state(con, uid, st):
+    r = con.execute("SELECT query, active FROM subs WHERE user_id=?", (uid,)).fetchone()
+    if not r or not r["active"]:
+        return "none"
+    return "same" if json.loads(r["query"]) == pb_query(st) else "other"
+
+
 def pb_show(con, uid, chat_id, mid, st):
-    edit(chat_id, mid, pb_result(con, st), pb_result_kb())
+    text = pb_result(con, st)
+    state = sub_state(con, uid, st)
+    if state == "same":
+        text += "\n\n🔔 <i>Ты подписан: новые вакансии под этот запрос бот пришлёт сам.</i>"
+    edit(chat_id, mid, text, pb_result_kb(state))
     event(con, uid, "podbor", json.dumps(st, ensure_ascii=False))
 
 
@@ -693,6 +729,213 @@ def pb_result(con, st):
     return "\n".join(lines)
 
 
+# ---------- рассылка новых вакансий (тест: только ADMIN_IDS) ----------
+
+SUB_DAILY_MAX = 3          # не больше 3 отдельных сообщений в день, остальное — вечерней сводкой
+QUIET_FROM, QUIET_TO = 22, 10   # с 22:00 до 10:00 по Москве не пишем — копим до утра
+DIGEST_HOURS = (10, 20)    # когда отправляем накопленное: утром и вечером
+INACTIVE_DAYS = 30         # не заходил в бота месяц — спрашиваем, нужна ли рассылка
+PING_WAIT_DAYS = 3         # не ответил — выключаем
+
+
+def msk_now():
+    return time.gmtime(time.time() + 3 * 3600)
+
+
+def pb_query(st):
+    return {k: st.get(k) for k in ("prof", "place", "exp", "salary", "schedule")}
+
+
+def query_title(q):
+    p = T.PROFESSIONS.get(q.get("prof"), {})
+    place = {"msk": "Москва", "any": "Москва и МО"}.get(q.get("place"), q.get("place") or "Москва и МО")
+    parts = [f"{p.get('emoji', '')} {p.get('name', '')}".strip(), place]
+    if q.get("salary"):
+        parts.append(f"от {PB.money(q['salary'])} ₽/смена")
+    if q.get("schedule") not in (None, "any"):
+        parts.append(PB_SCHED_NAMES.get(q["schedule"], ""))
+    return " · ".join(x for x in parts if x)
+
+
+def vac_line(r):
+    s = f"<a href=\"{post_link(r['message_id'])}\">{html.escape(first_line(r['text'], 50))}</a>\n" \
+        f"📍 {html.escape(PB.place_str(r))} · 💰 {html.escape(PB.salary_str(r))}"
+    if r["schedule"]:
+        s += f" · 🕒 {html.escape(PB.SCHEDULES.get(r['schedule'], r['schedule']))}"
+    if r["noexp"] == 1:
+        s += " · без опыта"
+    return s
+
+
+def sub_kb():
+    return kb([[("⚙️ Изменить запрос", "sb:edit"), ("🔕 Отписаться", "sb:off")],
+               [("📢 Все вакансии", CHANNEL_INVITE)]])
+
+
+def sub_callback(con, uid, chat_id, mid, data):
+    st = pb_get(con, uid)
+    if data == "sb:on" and st.get("done"):
+        q = pb_query(st)
+        con.execute("INSERT INTO subs(user_id, query, active, created, day, sent_today, ping_at) "
+                    "VALUES(?,?,1,?,?,0,NULL) ON CONFLICT(user_id) DO UPDATE SET query=excluded.query, "
+                    "active=1, ping_at=NULL", (uid, json.dumps(q, ensure_ascii=False), int(time.time()), ""))
+        con.commit()
+        event(con, uid, "sub_on", json.dumps(q, ensure_ascii=False))
+        pb_show(con, uid, chat_id, mid, st)
+        send(chat_id, "🔔 <b>Готово!</b> Как только в канале выйдет вакансия под твой запрос — пришлю сюда.\n\n"
+                      f"<i>{html.escape(query_title(q))}</i>\n\n"
+                      "Не больше 3 сообщений в день, ночью не беспокою. "
+                      "Отписаться можно в один клик под любым сообщением рассылки.")
+    elif data == "sb:off":
+        con.execute("UPDATE subs SET active=0 WHERE user_id=?", (uid,))
+        con.execute("DELETE FROM sub_queue WHERE user_id=?", (uid,))
+        con.commit()
+        event(con, uid, "sub_off")
+        send(chat_id, "🔕 Рассылка выключена. Включить снова — кнопкой под подборкой: /podbor",
+             kb([[("🔎 Открыть подборку", "sb:edit")]]))
+    elif data == "sb:edit":
+        r = con.execute("SELECT query FROM subs WHERE user_id=?", (uid,)).fetchone()
+        if r:
+            st.update(json.loads(r["query"]))
+            st["done"] = True
+            pb_set(con, uid, st)
+        if st.get("done"):
+            m = send(chat_id, "…")
+            pb_show(con, uid, chat_id, m["message_id"], st)
+        else:
+            send(chat_id, "🔎 <b>Подборка вакансий</b>\n\nКем хочешь работать?", pb_prof_kb())
+    elif data == "sb:keep":
+        con.execute("UPDATE subs SET ping_at=NULL WHERE user_id=?", (uid,))
+        con.commit()
+        touch_user(con, uid)
+        edit(chat_id, mid, "👍 Оставил рассылку. Пришлю, как появятся новые вакансии.", sub_kb())
+
+
+def notify_subscribers(con, message_id):
+    r = con.execute("SELECT v.*, p.text FROM vac v JOIN posts p ON p.message_id=v.message_id "
+                    "WHERE v.message_id=? AND p.closed=0", (message_id,)).fetchone()
+    if not r or not r["prof"]:
+        return
+    for sub in con.execute("SELECT * FROM subs WHERE active=1").fetchall():
+        if sub["user_id"] not in ADMIN_IDS:  # тест: рассылка только админам
+            continue
+        if PB.compare(r, json.loads(sub["query"])):
+            continue
+        deliver(con, sub, r)
+
+
+def deliver(con, sub, r, force=False):
+    """Сразу, если день и лимит не исчерпан; иначе — в очередь до сводки."""
+    now = msk_now()
+    today = time.strftime("%Y-%m-%d", now)
+    sent = sub["sent_today"] if sub["day"] == today else 0
+    quiet = now.tm_hour >= QUIET_FROM or now.tm_hour < QUIET_TO
+    if not force and (quiet or sent >= SUB_DAILY_MAX):
+        con.execute("INSERT OR IGNORE INTO sub_queue VALUES(?,?,?)",
+                    (sub["user_id"], r["message_id"], int(time.time())))
+        con.commit()
+        return "queued"
+    q = json.loads(sub["query"])
+    text = (f"🔔 <b>Новая вакансия под твой запрос</b>\n<i>{html.escape(query_title(q))}</i>\n\n" + vac_line(r))
+    try:
+        send(sub["user_id"], text, sub_kb())
+    except TgError as e:
+        log.warning("deliver %s: %s", sub["user_id"], e)
+        if "blocked" in str(e) or "deactivated" in str(e):
+            con.execute("UPDATE subs SET active=0 WHERE user_id=?", (sub["user_id"],))
+            con.commit()
+        return "error"
+    con.execute("UPDATE subs SET day=?, sent_today=? WHERE user_id=?", (today, sent + 1, sub["user_id"]))
+    con.commit()
+    event(con, sub["user_id"], "sub_sent", str(r["message_id"]))
+    return "sent"
+
+
+def send_digest(con, uid, force=False):
+    rows = con.execute(
+        "SELECT v.*, p.text FROM sub_queue q JOIN vac v ON v.message_id=q.message_id "
+        "JOIN posts p ON p.message_id=q.message_id WHERE q.user_id=? AND p.closed=0 ORDER BY v.date DESC",
+        (uid,)).fetchall()
+    sub = con.execute("SELECT * FROM subs WHERE user_id=?", (uid,)).fetchone()
+    con.execute("DELETE FROM sub_queue WHERE user_id=?", (uid,))
+    con.commit()
+    if not rows or not sub or not (sub["active"] or force):
+        return
+    q = json.loads(sub["query"])
+    n = len(rows)
+    lines = [f"🔔 <b>{n} {plural(n, 'новая вакансия', 'новые вакансии', 'новых вакансий')} под твой запрос</b>",
+             f"<i>{html.escape(query_title(q))}</i>", ""]
+    lines += [vac_line(r) + "\n" for r in rows[:10]]
+    if n > 10:
+        lines.append(f"<i>…и ещё {n - 10} — все в подборке.</i>")
+    send(uid, "\n".join(lines), sub_kb())
+    event(con, uid, "sub_digest", str(n))
+
+
+def ping_inactive(con, uid):
+    send(uid, "👋 Ты давно не заглядывал. <b>Рассылка вакансий ещё нужна?</b>\n\n"
+              "Если не ответишь за 3 дня — выключу, чтобы не беспокоить.",
+         kb([[("✅ Да, оставить", "sb:keep"), ("🔕 Выключить", "sb:off")]]))
+    con.execute("UPDATE subs SET ping_at=? WHERE user_id=?", (int(time.time()), uid))
+    con.commit()
+
+
+def subs_tick(con):
+    """Раз в цикл: сводки утром и вечером, проверка неактивных."""
+    now = msk_now()
+    slot = time.strftime("%Y-%m-%d ", now) + str(now.tm_hour)
+    if now.tm_hour in DIGEST_HOURS:
+        done = con.execute("SELECT value FROM state WHERE key='digest_slot'").fetchone()
+        if not done or done["value"] != slot:
+            con.execute("INSERT INTO state(key, value) VALUES('digest_slot', ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (slot,))
+            con.commit()
+            for r in con.execute("SELECT DISTINCT user_id FROM sub_queue").fetchall():
+                try:
+                    send_digest(con, r["user_id"])
+                except Exception:
+                    log.exception("digest %s", r["user_id"])
+    if now.tm_hour == 12:
+        old = int(time.time()) - INACTIVE_DAYS * 86400
+        for r in con.execute("SELECT s.user_id, s.ping_at FROM subs s JOIN users u ON u.id=s.user_id "
+                             "WHERE s.active=1 AND u.last_seen<?", (old,)).fetchall():
+            if r["ping_at"] is None:
+                ping_inactive(con, r["user_id"])
+            elif r["ping_at"] < time.time() - PING_WAIT_DAYS * 86400:
+                con.execute("UPDATE subs SET active=0 WHERE user_id=?", (r["user_id"],))
+                con.commit()
+                send(r["user_id"], "🔕 Выключил рассылку вакансий. Вернуть — /podbor")
+
+
+def on_testrass(con, msg):
+    """Показать админу все сообщения рассылки так, как их увидит соискатель."""
+    uid, chat = msg["from"]["id"], msg["chat"]["id"]
+    sub = con.execute("SELECT * FROM subs WHERE user_id=? AND active=1", (uid,)).fetchone()
+    if not sub:
+        send(chat, "Сначала подпишись: /podbor → кнопка «🔔 Присылать новые вакансии под этот запрос».")
+        return
+    q = json.loads(sub["query"])
+    exact, near = PB.match(con, q, days=30)
+    rows = [r for r, _ in exact] or [r for r, _ in near]
+    if not rows:
+        send(chat, "За 30 дней нет вакансий даже похожих на запрос — показать нечего. Поменяй запрос в /podbor.")
+        return
+    note = "" if exact else " (точных нет — для показа беру похожие)"
+    send(chat, f"🧪 <b>Тест рассылки</b>{note}. Ниже 3 сообщения — ровно как их увидит соискатель.")
+    send(chat, "<b>1. Новая вакансия</b> — приходит сразу после выхода поста (днём, до 3 в день):")
+    deliver(con, sub, rows[0], force=True)
+    send(chat, "<b>2. Сводка</b> — если вакансий больше 3 в день или они вышли ночью, "
+               "приходят одним сообщением в 10:00 и 20:00:")
+    for r in rows[:4]:
+        con.execute("INSERT OR IGNORE INTO sub_queue VALUES(?,?,?)", (uid, r["message_id"], int(time.time())))
+    con.commit()
+    send_digest(con, uid, force=True)
+    send(chat, "<b>3. Проверка активности</b> — если человек месяц не открывал бота:")
+    ping_inactive(con, uid)
+    con.execute("UPDATE subs SET ping_at=NULL WHERE user_id=?", (uid,))
+    con.commit()
+
+
 def _answer(cq_id, text=None):
     try:
         tg("answerCallbackQuery", callback_query_id=cq_id, text=text, show_alert=bool(text))
@@ -714,7 +957,9 @@ def handle(con, upd):
         if channel_username() and uname == channel_username().lower():
             save_post(con, post)
             try:
-                analyze_post(con, post["message_id"], notify=True)
+                fields = analyze_post(con, post["message_id"], notify=True)
+                if fields and "channel_post" in upd:  # только новые посты, не правки
+                    notify_subscribers(con, post["message_id"])
             except Exception:
                 log.exception("analyze_post %s failed", post.get("message_id"))
         return
@@ -755,6 +1000,10 @@ def main():
             log.warning("getUpdates: %s", e)
             time.sleep(5)
             continue
+        try:
+            subs_tick(con)
+        except Exception:
+            log.exception("subs_tick failed")
         for upd in updates:
             offset = upd["update_id"] + 1
             try:

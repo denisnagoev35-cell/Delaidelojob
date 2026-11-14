@@ -498,7 +498,32 @@ def describe(r, prof_names):
 
 # ---------- подбор ----------
 
-def match(con, q, days=7, limit=8):
+def compare(r, q):
+    """Чем вакансия r не совпадает с запросом q (пустой список — подходит точно)."""
+    diffs = []
+    if r["prof"] != q.get("prof"):
+        return ["другая профессия"]
+    place = q.get("place", "any")
+    if place != "any" and not r["city"]:
+        diffs.append("место не указано")
+    elif place == "msk" and r["city"] != MOSCOW:
+        diffs.append(f"не Москва — {r['city']}")
+    elif place not in ("any", "msk") and r["city"] != place:
+        diffs.append(f"в другом месте — {place_str(r)}")
+    want = q.get("salary") or 0
+    if want and r["shift_eq"] is None:
+        diffs.append("ставка не указана")
+    elif want and r["shift_eq"] < want:
+        diffs.append(f"ставка ниже — {salary_str(r)}")
+    if q.get("exp") == "none" and r["noexp"] == 0:
+        diffs.append("нужен опыт")
+    sch = q.get("schedule", "any")
+    if sch in WANT_SCHEDULE and r["schedule"] and r["schedule"] not in WANT_SCHEDULE[sch]:
+        diffs.append(f"график {SCHEDULES.get(r['schedule'], r['schedule'])}")
+    return diffs
+
+
+def match(con, q, days=7):
     """q: prof, place ('msk' | 'any' | имя города), exp, salary (за смену или 0), schedule ('any' или код).
     Возвращает (точные, ближайшие с пометкой «чем отличается»)."""
     since = int(time.time()) - days * 86400
@@ -507,24 +532,7 @@ def match(con, q, days=7, limit=8):
         "WHERE p.closed=0 AND v.date>=? AND v.prof=? ORDER BY v.date DESC", (since, q["prof"])).fetchall()
     exact, near = [], []
     for r in rows:
-        diffs = []
-        place = q.get("place", "any")
-        if place != "any" and not r["city"]:
-            diffs.append("место не указано")
-        elif place == "msk" and r["city"] != MOSCOW:
-            diffs.append(f"не Москва — {r['city']}")
-        elif place not in ("any", "msk") and r["city"] != place:
-            diffs.append(f"в другом месте — {place_str(r)}")
-        want = q.get("salary") or 0
-        if want and r["shift_eq"] is None:
-            diffs.append("ставка не указана")
-        elif want and r["shift_eq"] < want:
-            diffs.append(f"ставка ниже — {salary_str(r)}")
-        if q.get("exp") == "none" and r["noexp"] == 0:
-            diffs.append("нужен опыт")
-        sch = q.get("schedule", "any")
-        if sch in WANT_SCHEDULE and r["schedule"] and r["schedule"] not in WANT_SCHEDULE[sch]:
-            diffs.append(f"график {SCHEDULES.get(r['schedule'], r['schedule'])}")
+        diffs = compare(r, q)
         (exact if not diffs else near).append((r, diffs))
     # новичкам первыми — те, где явно берут без опыта
     if q.get("exp") == "none":

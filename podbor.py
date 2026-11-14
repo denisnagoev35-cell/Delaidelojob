@@ -440,7 +440,8 @@ def clean_title(t):
 
 def clean_metro(m):
     """«м. Академическая или м. Ленинский проспект» → «Академическая, Ленинский проспект»."""
-    m = re.sub(r"(?i)\b(?:ст\.\s*)?(?:м\.|метро|мцк|мцд)\s*", "", m or "")
+    m = re.sub(r"[\[\]'\"]", "", m or "")  # нейросеть иногда отдаёт список: ['Трубная', 'Цветной бульвар']
+    m = re.sub(r"(?i)\b(?:ст\.\s*)?(?:м\.|метро|мцк|мцд)\s*", "", m)
     parts = [x.strip(" .,;") for x in re.split(r"\s+или\s+|[,/;]", m) if x.strip(" .,;")]
     return ", ".join(parts[:2])[:60] or None
 
@@ -471,7 +472,8 @@ def from_gpt(g, prof_keys):
         cities = [g.get("city")] if g.get("city") else []
     cities = [c for c in dict.fromkeys(canon_city(str(x)) for x in cities) if c]
     if g.get("metro"):
-        out["metro"] = clean_metro(str(g["metro"]))
+        m = g["metro"]
+        out["metro"] = clean_metro(", ".join(map(str, m)) if isinstance(m, list) else str(m))
         if MOSCOW not in cities:
             cities.insert(0, MOSCOW)
     if cities:

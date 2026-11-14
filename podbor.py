@@ -102,7 +102,7 @@ def canon_city(name):
 
 METRO_RE = re.compile(r"(?:\bм\.|\bметро|\bмцк|\bмцд|\bст\.\s*м\.)\s*[«\"]?([А-ЯЁ][А-Яа-яё\-]+"
                       r"(?: (?:[А-ЯЁ][а-яё\-]+|пруды|бульвар|проспект|парк|поле|ворота|площадь|шоссе|"
-                      r"переулок|улица|сокол|горы|холмы|мост|вал))?)")
+                      r"переулок|улица|сокол|горы|холмы|мост|вал|стадион|бульвар|набережная|пруд|роща|сад))?)")
 MOSCOW_RE = re.compile(r"\bмоскв|\bмск\b|\b(?:цао|сао|свао|вао|ювао|юао|юзао|зао|сзао|зелао|нао|тао)\b", re.I)
 
 # ---------- профессия ----------
@@ -299,7 +299,9 @@ GPT_SYSTEM = (
     ' "salary_unit": "shift" (за смену/выход) | "hour" | "month" | null,\n'
     ' "schedule": "2/2" | "3/3" | "5/2" | "shifts" (другой сменный) | "flexible" (гибкий, смены выбираешь сам) '
     '| "parttime" (подработка, разовые смены) | null,\n'
-    ' "no_experience": true если берут без опыта / обучают, false если опыт обязателен, иначе null}\n'
+    ' "no_experience": true если берут без опыта / обучают, false если опыт обязателен, иначе null,\n'
+    ' "title": название заведения или сети как в тексте (без «требуется», «ищем», приветствий, эмодзи, '
+    'обычными буквами, не капсом), до 40 символов; если названия нет — null}\n'
     "Правила: «6-8 тыс.» = 6000 и 8000; «4500 т.р» = 4500; «от 130 тысяч в месяц» = salary_min 130000, month. "
     "hostess — это и хостес, и администратор зала/заведения. "
     "В каждом поле — ОДНО значение (если графиков несколько — первый). Чаевые и проценты не прибавляй. "
@@ -358,6 +360,22 @@ def extract_json(answer):
     return None
 
 
+GREETING_RE = re.compile(r"^(?:всем\s+)?(?:привет\w*|здравствуй\w*|добр\w+\s+(?:день|утро|вечер)|хай|внимание|"
+                         r"срочно|вакансия|ищем|требу\w+|друзья|коллеги)[!.,\s]*$", re.I)
+
+
+def clean_title(t):
+    t = re.sub(r"[^\w\s«»\"'&.,:+()\-–—/№]", "", str(t or "")).strip(" .,:;-–—")
+    if not t or t.lower() in ("null", "none") or GREETING_RE.match(t) or len(t) < 2:
+        return None
+    letters = [c for c in t if c.isalpha()]
+    if letters and sum(c.isupper() for c in letters) / len(letters) > 0.7 and len(letters) > 4:
+        t = t.capitalize()  # КАПС → обычный текст
+    if len(t) > 45:
+        t = t[:45].rsplit(" ", 1)[0].rstrip(" ,.;:—–-(") + "…"
+    return t
+
+
 def clean_metro(m):
     """«м. Академическая или м. Ленинский проспект» → «Академическая, Ленинский проспект»."""
     m = re.sub(r"(?i)\b(?:ст\.\s*)?(?:м\.|метро|мцк|мцд)\s*", "", m or "")
@@ -394,6 +412,9 @@ def from_gpt(g, prof_keys):
             out.update(sal_min=lo, sal_max=hi, unit=unit)
     if g.get("schedule") in SCHEDULES:
         out["schedule"] = g["schedule"]
+    t = clean_title(g.get("title"))
+    if t:
+        out["title"] = t
     if isinstance(g.get("no_experience"), bool):
         out["noexp"] = 1 if g["no_experience"] else 0
     return out
@@ -401,7 +422,7 @@ def from_gpt(g, prof_keys):
 
 # ---------- база ----------
 
-FIELDS = ("prof", "city", "metro", "sal_min", "sal_max", "unit", "schedule", "noexp")
+FIELDS = ("prof", "city", "metro", "sal_min", "sal_max", "unit", "schedule", "noexp", "title")
 
 
 def db_init(con):
@@ -411,6 +432,9 @@ def db_init(con):
       prof TEXT, city TEXT, metro TEXT, sal_min INTEGER, sal_max INTEGER, unit TEXT,
       shift_eq INTEGER, schedule TEXT, noexp INTEGER, parsed_by TEXT, asked INTEGER DEFAULT 0);
     """)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(vac)")}
+    if "title" not in cols:
+        con.execute("ALTER TABLE vac ADD COLUMN title TEXT")
     con.commit()
 
 
@@ -437,14 +461,14 @@ def store(con, message_id, date, text, fields, by):
     eq = shift_equiv(fields.get("sal_min"), fields.get("sal_max"), fields.get("unit"))
     con.execute(
         "INSERT INTO vac(message_id, date, hash, prof, city, metro, sal_min, sal_max, unit, shift_eq, "
-        "schedule, noexp, parsed_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "schedule, noexp, parsed_by, title) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(message_id) DO UPDATE SET hash=excluded.hash, prof=excluded.prof, city=excluded.city, "
         "metro=excluded.metro, sal_min=excluded.sal_min, sal_max=excluded.sal_max, unit=excluded.unit, "
         "shift_eq=excluded.shift_eq, schedule=excluded.schedule, noexp=excluded.noexp, "
-        "parsed_by=excluded.parsed_by",
+        "parsed_by=excluded.parsed_by, title=excluded.title",
         (message_id, date, text_hash(text), fields.get("prof"), fields.get("city"), fields.get("metro"),
          fields.get("sal_min"), fields.get("sal_max"), fields.get("unit"), eq, fields.get("schedule"),
-         fields.get("noexp"), by))
+         fields.get("noexp"), by, fields.get("title")))
     con.commit()
 
 

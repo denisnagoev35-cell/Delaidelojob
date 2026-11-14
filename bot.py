@@ -239,16 +239,25 @@ def post_link(message_id):
     return f"https://t.me/{u}/{message_id}" if u else CHANNEL_INVITE
 
 
-def vac_title(text, limit=60):
-    """Заголовок вакансии для списков: название заведения без ставки и адреса, обрезка по словам."""
-    line = first_line(text, 500)
+def vac_title(text, limit=60, title=None):
+    """Заголовок вакансии для списков: название заведения (от нейросети) или первая содержательная строка."""
+    t = PB.clean_title(title) if title else None
+    if t:
+        return t
+    line = "Вакансия"
+    for raw in (text or "").splitlines():
+        cand = HASHTAG_RE.sub("", raw).strip(" •-—*_!.,")
+        cand = re.split(r"\s+[|•·]\s+|\s+[—–-]\s+(?=\d|от\s|до\s)|,\s+(?=м\.|метро|\d|от\s|до\s)", cand)[0]
+        if PB.clean_title(cand):  # пропускаем «Привет!», «Срочно!», пустые и эмодзи
+            first = re.split(r"(?<![\s(]м)(?<![\s(]г)(?<!ст)(?<!ул)[.!?](?:\s|$)", " " + cand)[0].strip()
+            line = PB.clean_title(first) or cand
+            break
     head = re.split(r"\s+[|•·]\s+|\s+[—–-]\s+(?=\d|от\s|до\s)|,\s+(?=м\.|метро|\d|от\s|до\s)", line)[0]
     head = head.strip(" ,.;:—–-")
     if len(head) >= 6:
         line = head
     if len(line) > limit:
-        cut = line[:limit].rsplit(" ", 1)[0].rstrip(" ,.;:—–-(")
-        line = cut + "…"
+        line = line[:limit].rsplit(" ", 1)[0].rstrip(" ,.;:—–-(") + "…"
     return line
 
 
@@ -744,7 +753,7 @@ def pb_result(con, st):
         extra.append(PB_SCHED_NAMES.get(st["schedule"], ""))
     lines = [head, "<i>" + html.escape(" · ".join(x for x in extra if x)) + "</i>", ""]
     def item(r, diffs=None):
-        s = f"• <a href=\"{post_link(r['message_id'])}\">{html.escape(vac_title(r['text']))}</a>\n" \
+        s = f"• <a href=\"{post_link(r['message_id'])}\">{html.escape(vac_title(r['text'], title=r['title']))}</a>\n" \
             f"   {html.escape(PB.place_str(r))} · {html.escape(PB.salary_str(r))}"
         if diffs:
             s += f"\n   <i>{html.escape('; '.join(diffs))}</i>"
@@ -800,7 +809,7 @@ def query_title(q):
 
 
 def vac_line(r):
-    s = f"<a href=\"{post_link(r['message_id'])}\">{html.escape(vac_title(r['text']))}</a>\n" \
+    s = f"<a href=\"{post_link(r['message_id'])}\">{html.escape(vac_title(r['text'], title=r['title']))}</a>\n" \
         f"📍 {html.escape(PB.place_str(r))} · 💰 {html.escape(PB.salary_str(r))}"
     if r["schedule"]:
         s += f" · 🕒 {html.escape(PB.SCHEDULES.get(r['schedule'], r['schedule']))}"

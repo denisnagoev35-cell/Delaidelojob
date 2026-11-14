@@ -210,13 +210,18 @@ def save_post(con, post):
     con.commit()
 
 
-def fresh_vacancies(con, tag, limit=3, max_age_days=21):
+# Дополнительные хэштеги профессии (основной — в texts.py, поле tag)
+ALT_TAGS = {"hostess": ["#администратор", "#админ"], "kalyan": ["#км", "#пкм"]}
+
+
+def fresh_vacancies(con, tag, limit=3, max_age_days=21, alt=()):
     since = int(time.time()) - max_age_days * 86400
     rows = con.execute("SELECT message_id, text, tags FROM posts WHERE closed=0 AND date>=? "
                        "ORDER BY date DESC LIMIT 200", (since,)).fetchall()
     out = []
     for r in rows:
-        if tag.lower() in r["tags"].split():
+        tags = r["tags"].split()
+        if tag.lower() in tags or any(a in tags for a in alt):
             out.append(r)
         if len(out) >= limit:
             break
@@ -296,7 +301,7 @@ def result_text(prof_key, region_key, exp_key):
 
 def full_text(con, prof_key):
     p = T.PROFESSIONS[prof_key]
-    vac = fresh_vacancies(con, p["tag"])
+    vac = fresh_vacancies(con, p["tag"], alt=ALT_TAGS.get(prof_key, ()))
     if vac:
         lines = [T.VACANCIES_HEAD]
         for r in vac:

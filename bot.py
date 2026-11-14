@@ -342,10 +342,7 @@ def full_text(con, prof_key):
 
 def welcome(con, uid):
     """Текст приветствия: с рекламы — про зарплату, как в объявлении; остальным — общий."""
-    u = get_user(con, uid)
-    src = (u["source"] if u else "") or ""
-    text = T.WELCOME_AD if src.startswith(T.AD_SOURCES) else T.WELCOME
-    return text.format(privacy=T.PRIVACY_URL)
+    return T.WELCOME.format(privacy=T.PRIVACY_URL)
 
 
 def on_start(con, msg):

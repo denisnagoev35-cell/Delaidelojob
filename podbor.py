@@ -116,7 +116,7 @@ def find_prof(text, tags, prof_tags):
     for t in tags:
         if t in tag_map:
             return tag_map[t]
-    if "#км" in tags:
+    if "#км" in tags or "#пкм" in tags:
         return "kalyan"
     low = _norm(text)
     for key, rx in PROF_WORDS:
@@ -305,11 +305,28 @@ def gpt_parse(text, prof_keys):
             log.warning("YandexGPT %s: %s", r.status, raw[:300])
             return None
         answer = json.loads(raw)["result"]["alternatives"][0]["message"]["text"]
-        m = re.search(r"\{.*\}", answer, re.S)
-        return json.loads(m.group(0)) if m else None
+        return extract_json(answer)
     except Exception as e:  # сеть, JSON — не роняем бота, работаем на правилах
         log.warning("YandexGPT failed: %s", e)
         return None
+
+
+def extract_json(answer):
+    """Первый JSON-объект из ответа: YandexGPT иногда добавляет ```, пояснения или второй объект."""
+    dec = json.JSONDecoder()
+    for m in re.finditer(r"\{", answer or ""):
+        chunk = answer[m.start():]
+        comma = lambda x: re.sub(r",\s*([}\]])", r"\1", x)                       # лишняя запятая
+        quote = lambda x: re.sub(r"(?<=[{,])\s*([a-z_]+)\s*:", r'"\1":', x)    # ключ без кавычек
+        for fix in (lambda x: x, comma, quote, lambda x: comma(quote(x))):
+            try:
+                obj, _ = dec.raw_decode(fix(chunk))
+                if isinstance(obj, dict):
+                    return obj
+            except ValueError:
+                continue
+    log.warning("YandexGPT: не JSON: %r", (answer or "")[:200])
+    return None
 
 
 def _int(v):
@@ -364,7 +381,12 @@ def db_init(con):
 def parse_post(text, tags, prof_keys, use_gpt=True):
     """Разбор поста: YandexGPT + правила. Возвращает (поля, кто разобрал)."""
     rules = parse_rules(text, tags, prof_keys)
-    g = from_gpt(gpt_parse(text, prof_keys), prof_keys) if use_gpt else {}
+    raw = gpt_parse(text, prof_keys) if use_gpt else None
+    g = from_gpt(raw, prof_keys)
+    tag_prof = find_prof("", tags, prof_keys)  # профессия только по хэштегу
+    if raw is not None and not tag_prof and not g.get("prof"):
+        # нет хэштега профессии и нейросеть не видит вакансию — это не вакансия (промо, анонс)
+        rules["prof"] = None
     out = {}
     for f in FIELDS:
         out[f] = g.get(f) if g.get(f) is not None else rules.get(f)

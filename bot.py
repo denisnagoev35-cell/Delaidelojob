@@ -476,15 +476,19 @@ def on_admin(con, msg, text):
         send(chat, f"Разбираю {len(ids)} постов за {days} дн… (поправленные вручную не трогаю)")
         con.execute("DELETE FROM vac WHERE message_id IN (%s)" % ",".join("?" * len(ids)), ids)
         con.commit()
-        ok = gpt = 0
+        ok = gpt = media = 0
         no_city, no_sal, no_prof = [], [], []
         for n in ids:
+            row = con.execute("SELECT text FROM posts WHERE message_id=?", (n,)).fetchone()
+            if not row or not (row["text"] or "").strip():
+                media += 1  # фото/видео без текста
+                continue
             f = analyze_post(con, n) or {}
             r = PB.get_vac(con, n)
             if r and r["parsed_by"] == "gpt":
                 gpt += 1
             if not f.get("prof"):
-                no_prof.append(n)
+                no_prof.append(n)  # промо, анонсы, дайджесты
                 continue
             if not f.get("city"):
                 no_city.append(n)
@@ -492,9 +496,10 @@ def on_admin(con, msg, text):
                 no_sal.append(n)
             if f.get("city") and f.get("unit"):
                 ok += 1
-        lines = [f"✅ Готово: полностью разобрано {ok} из {len(ids)} (через YandexGPT: {gpt})."]
+        lines = [f"✅ Готово: полностью разобрано {ok} из {len(ids) - media} постов с текстом "
+                 f"(через YandexGPT: {gpt}; без текста пропущено: {media})."]
         if no_prof:
-            lines.append(f"Без профессии (не вакансия?): {', '.join(map(str, no_prof))}")
+            lines.append(f"Не вакансии (промо, анонсы): {', '.join(map(str, no_prof))}")
         if no_city:
             lines.append(f"Нет места: {', '.join(map(str, no_city))}")
         if no_sal:

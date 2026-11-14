@@ -340,6 +340,14 @@ def full_text(con, prof_key):
                          vacancies=vac_block)
 
 
+def welcome(con, uid):
+    """Текст приветствия: с рекламы — про зарплату, как в объявлении; остальным — общий."""
+    u = get_user(con, uid)
+    src = (u["source"] if u else "") or ""
+    text = T.WELCOME_AD if src.startswith(T.AD_SOURCES) else T.WELCOME
+    return text.format(privacy=T.PRIVACY_URL)
+
+
 def on_start(con, msg):
     uid = msg["from"]["id"]
     parts = (msg.get("text") or "").split(maxsplit=1)
@@ -347,7 +355,7 @@ def on_start(con, msg):
     source = payload if SOURCE_RE.match(payload) else None
     touch_user(con, uid, source)
     event(con, uid, "start", source or "")
-    send(msg["chat"]["id"], T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb(msg["from"]["id"]))
+    send(msg["chat"]["id"], welcome(con, msg["from"]["id"]), professions_kb(msg["from"]["id"]))
 
 
 def on_stats(con, msg):
@@ -410,7 +418,7 @@ def on_callback(con, cq):
                 PB.set_field(con, int(n), manual=True, city=PB.MOSCOW)
                 edit(chat_id, mid, vac_card(con, int(n)))
     elif data == "restart":
-        edit(chat_id, mid, T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb(uid))
+        edit(chat_id, mid, welcome(con, uid), professions_kb(uid))
     elif data == "emp":
         event(con, uid, "employer")
         send(chat_id, T.EMPLOYER.format(contact=T.CONTACT, oferta=T.OFERTA_URL),
@@ -1057,7 +1065,7 @@ def handle(con, upd):
         pb_city_text(con, msg, text)
     else:
         touch_user(con, msg["from"]["id"])
-        send(msg["chat"]["id"], T.WELCOME.format(privacy=T.PRIVACY_URL), professions_kb(msg["from"]["id"]))
+        send(msg["chat"]["id"], welcome(con, msg["from"]["id"]), professions_kb(msg["from"]["id"]))
 
 
 def main():

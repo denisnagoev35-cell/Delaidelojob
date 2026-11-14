@@ -533,4 +533,4 @@ def match(con, q, days=7, limit=8):
         exact.sort(key=lambda x: 0 if x[0]["noexp"] == 1 else 1)
     # среди «близких» первыми — те, что в нужном месте
     near.sort(key=lambda x: (any(d.startswith(("не Москва", "в другом месте", "место")) for d in x[1]), len(x[1])))
-    return exact[:limit], near[:max(0, limit - len(exact))][:3]
+    return exact, near

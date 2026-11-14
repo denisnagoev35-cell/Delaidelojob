@@ -568,7 +568,7 @@ def pb_result_kb():
     return kb([
         [("📍 Место", "pb:c:w"), ("💰 Ставка", "pb:c:s")],
         [("🕒 График", "pb:c:g"), ("🧑‍🍳 Опыт", "pb:c:e")],
-        [("🔄 Другая профессия", "pb:c:p"), ("🆕 Новый поиск", "pb:new")],
+        [("🆕 Новый поиск", "pb:new")],
         [("📢 Все вакансии", CHANNEL_INVITE)],
     ])
 
@@ -643,6 +643,17 @@ def pb_city_text(con, msg, text):
     pb_set(con, uid, st)
 
 
+PB_MAX = 8    # сколько подходящих показываем
+PB_NEAR = 3   # сколько похожих добавляем, если подходящих мало
+
+
+def plural(n, one, few, many):
+    n = abs(n) % 100
+    if 11 <= n <= 14:
+        return many
+    return {1: one, 2: few, 3: few, 4: few}.get(n % 10, many)
+
+
 def pb_result(con, st):
     exact, near = PB.match(con, st)
     p = T.PROFESSIONS[st["prof"]]
@@ -660,16 +671,23 @@ def pb_result(con, st):
         if diffs:
             s += f"\n   <i>{html.escape('; '.join(diffs))}</i>"
         return s
+    show_exact = exact[:PB_MAX]
+    show_near = near[:max(0, PB_MAX - len(show_exact))][:PB_NEAR]
     if exact:
-        lines.append(f"✅ <b>Подходят ({len(exact)})</b> — за последние 7 дней:")
-        lines += [item(r) for r, _ in exact]
+        lines.append(f"✅ <b>{plural(len(exact), 'Нашлась', 'Нашлись', 'Нашлись')} {len(exact)} "
+                     f"{plural(len(exact), 'вакансия', 'вакансии', 'вакансий')}</b> — "
+                     f"это {'единственная подходящая' if len(exact) == 1 else 'все подходящие'} за 7 дней"
+                     + (f", показаны первые {len(show_exact)}:" if len(exact) > len(show_exact) else ":"))
+        lines += [item(r) for r, _ in show_exact]
     else:
-        lines.append("Точно под тебя за неделю вакансий нет 😕")
-    if near:
-        lines += ["", "🔸 <b>Близко, но не всё совпадает:</b>"]
-        lines += [item(r, d) for r, d in near]
-    if not exact and not near:
-        lines.append(f"Загляни в канал по хэштегу {p['tag']} — новые вакансии выходят каждый день.")
+        lines.append("😕 За 7 дней вакансий точно под твой запрос нет.")
+    if show_near:
+        lines += ["", f"🔸 <b>Похожие, но не всё совпадает</b> "
+                      f"({len(show_near)}{' из ' + str(len(near)) if len(near) > len(show_near) else ''}):"]
+        lines += [item(r, d) for r, d in show_near]
+    if not exact:
+        lines += ["", "Попробуй изменить место, ставку или график кнопками ниже. "
+                      f"Новые вакансии выходят в канале каждый день — хэштег {p['tag']}."]
     return "\n".join(lines)
 
 

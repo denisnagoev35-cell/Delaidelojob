@@ -445,8 +445,15 @@ def on_admin(con, msg, text):
     cmd, *args = text.split()
     cmd = cmd.split("@")[0].lower()
     if cmd == "/podbor":
-        pb_set(con, msg["from"]["id"], {})
-        send(chat, "🔎 <b>Подборка вакансий</b> (тест)\n\nКем хочешь работать?", pb_prof_kb())
+        uid = msg["from"]["id"]
+        st = pb_get(con, uid)
+        st.pop("wait", None)
+        if st.get("done") and st.get("prof") in T.PROFESSIONS:
+            r = send(chat, "…")
+            pb_show(con, uid, chat, r["message_id"], st)
+        else:
+            pb_set(con, uid, {})
+            send(chat, "🔎 <b>Подборка вакансий</b> (тест)\n\nКем хочешь работать?", pb_prof_kb())
     elif cmd == "/vac" and args and args[0].isdigit():
         send(chat, vac_card(con, int(args[0])))
     elif cmd == "/mesto" and len(args) >= 2 and args[0].isdigit():
@@ -531,58 +538,109 @@ def pb_prof_kb():
 
 
 PB_SALARY = [0, 3000, 4000, 5000, 6000, 7000]
-PB_SCHED = [("2/2", "2/2"), ("5/2", "5/2"), ("Подработка", "parttime"), ("Не важно", "any")]
+PB_SCHED = [("Сменный 2/2, 3/3", "shift"), ("Пятидневка 5/2", "52"),
+            ("Подработка, пара смен", "part"), ("Не важно", "any")]
+PB_SCHED_NAMES = {k: n for n, k in PB_SCHED}
 
 
-def pb_ask_exp(chat_id, mid):
-    edit(chat_id, mid, "🧑‍🍳 Какой у тебя опыт?",
+def pb_q_place(chat_id, mid):
+    edit(chat_id, mid, "📍 Где удобно работать?",
+         kb([[("Москва", "pb:w:msk"), ("Подмосковье", "pb:w:mo")], [("Не важно", "pb:w:any")]]))
+
+
+def pb_q_exp(chat_id, mid, prefix=""):
+    edit(chat_id, mid, prefix + "🧑‍🍳 Какой у тебя опыт?",
          kb([[(name, f"pb:e:{k}")] for k, name in T.EXPERIENCE.items()]))
+
+
+def pb_q_salary(chat_id, mid):
+    edit(chat_id, mid, "💰 Сколько хочешь за смену (минимум)?",
+         kb([[(f"от {PB.money(v)} ₽" if v else "Не важно", f"pb:s:{v}") for v in PB_SALARY[i:i + 2]]
+             for i in range(0, len(PB_SALARY), 2)]))
+
+
+def pb_q_sched(chat_id, mid):
+    edit(chat_id, mid, "🕒 Какой график нужен?",
+         kb([[(n, f"pb:g:{k}")] for n, k in PB_SCHED]))
+
+
+def pb_result_kb():
+    return kb([
+        [("📍 Место", "pb:c:w"), ("💰 Ставка", "pb:c:s")],
+        [("🕒 График", "pb:c:g"), ("🧑‍🍳 Опыт", "pb:c:e")],
+        [("🔄 Другая профессия", "pb:c:p"), ("🆕 Новый поиск", "pb:new")],
+        [("📢 Все вакансии", CHANNEL_INVITE)],
+    ])
+
+
+def pb_show(con, uid, chat_id, mid, st):
+    edit(chat_id, mid, pb_result(con, st), pb_result_kb())
+    event(con, uid, "podbor", json.dumps(st, ensure_ascii=False))
+
+
+# порядок вопросов; после первой выдачи (done) меняется только один параметр и сразу новая выдача
+PB_NEXT = {"p": pb_q_place, "w": pb_q_exp, "e": pb_q_salary, "s": pb_q_sched}
+
+
+def pb_after(con, uid, chat_id, mid, st, step):
+    if st.get("done") or step == "g":
+        st["done"] = True
+        st.setdefault("place", "any")
+        pb_show(con, uid, chat_id, mid, st)
+    else:
+        PB_NEXT[step](chat_id, mid)
 
 
 def pb_callback(con, uid, chat_id, mid, data):
     st = pb_get(con, uid)
     _, step, val = (data.split(":", 2) + ["", "", ""])[:3]
-    if step == "p" and val in T.PROFESSIONS:
-        st = {"prof": val}
-        edit(chat_id, mid, "📍 Где удобно работать?",
-             kb([[("Москва", "pb:w:msk"), ("Подмосковье", "pb:w:mo")], [("Не важно", "pb:w:any")]]))
-    elif step == "w" and "prof" in st:
+    if step == "c":  # «изменить» с экрана результатов
+        st.pop("wait", None)
+        ask = {"p": None, "w": pb_q_place, "e": pb_q_exp, "s": pb_q_salary, "g": pb_q_sched}
+        if val == "p":
+            edit(chat_id, mid, "Кем хочешь работать?", pb_prof_kb())
+        elif val in ask:
+            ask[val](chat_id, mid)
+    elif step == "new":
+        st = {}
+        edit(chat_id, mid, "🔎 <b>Подборка вакансий</b> (тест)\n\nКем хочешь работать?", pb_prof_kb())
+    elif step == "p" and val in T.PROFESSIONS:
+        st["prof"] = val
+        pb_after(con, uid, chat_id, mid, st, "p")
+    elif "prof" not in st:
+        edit(chat_id, mid, "Начнём заново: /podbor")
+    elif step == "w":
         if val == "mo":
             st["wait"] = "city"
             edit(chat_id, mid, "🏙 Напиши город, например: <b>Химки</b>")
         else:
             st["place"] = val
-            pb_ask_exp(chat_id, mid)
-    elif step == "e" and val in T.EXPERIENCE and "prof" in st:
+            pb_after(con, uid, chat_id, mid, st, "w")
+    elif step == "e" and val in T.EXPERIENCE:
         st["exp"] = val
-        edit(chat_id, mid, "💰 Сколько хочешь за смену (минимум)?",
-             kb([[(f"от {PB.money(v)} ₽" if v else "Не важно", f"pb:s:{v}") for v in PB_SALARY[i:i + 2]]
-                 for i in range(0, len(PB_SALARY), 2)]))
-    elif step == "s" and val.isdigit() and "prof" in st:
+        pb_after(con, uid, chat_id, mid, st, "e")
+    elif step == "s" and val.isdigit():
         st["salary"] = int(val)
-        edit(chat_id, mid, "🕒 Какой график нужен?",
-             kb([[(n, f"pb:g:{k}") for n, k in PB_SCHED[:2]], [(n, f"pb:g:{k}") for n, k in PB_SCHED[2:]]]))
-    elif step == "g" and "prof" in st:
+        pb_after(con, uid, chat_id, mid, st, "s")
+    elif step == "g" and val in PB_SCHED_NAMES:
         st["schedule"] = val
-        st.setdefault("place", "any")
-        edit(chat_id, mid, pb_result(con, st),
-             kb([[("🔁 Ещё раз", "pb:p:" + st["prof"])], [("📢 Все вакансии", CHANNEL_INVITE)]]))
-        event(con, uid, "podbor", json.dumps(st, ensure_ascii=False))
+        pb_after(con, uid, chat_id, mid, st, "g")
     pb_set(con, uid, st)
 
 
 def pb_city_text(con, msg, text):
     uid = msg["from"]["id"]
+    chat = msg["chat"]["id"]
     st = pb_get(con, uid)
     city = PB.canon_city(text)
     if not city:
-        send(msg["chat"]["id"], "Не нашёл такой город в МО 🙈 Напиши как на карте, например: Красногорск")
+        send(chat, "Не нашёл такой город в МО 🙈 Напиши как на карте, например: Красногорск")
         return
     st.pop("wait", None)
     st["place"] = "msk" if city == PB.MOSCOW else city
+    r = send(chat, "…")
+    pb_after(con, uid, chat, r["message_id"], st, "w")
     pb_set(con, uid, st)
-    send(msg["chat"]["id"], f"📍 {html.escape(city)}\n\n🧑‍🍳 Какой у тебя опыт?",
-         kb([[(name, f"pb:e:{k}")] for k, name in T.EXPERIENCE.items()]))
 
 
 def pb_result(con, st):
@@ -592,7 +650,10 @@ def pb_result(con, st):
     head = f"🔎 <b>{p['emoji']} {p['name']} · {html.escape(place)}</b>"
     if st.get("salary"):
         head += f" · от {PB.money(st['salary'])} ₽/смена"
-    lines = [head, ""]
+    extra = [T.EXPERIENCE.get(st.get("exp"), "")]
+    if st.get("schedule") not in (None, "any"):
+        extra.append(PB_SCHED_NAMES.get(st["schedule"], ""))
+    lines = [head, "<i>" + html.escape(" · ".join(x for x in extra if x)) + "</i>", ""]
     def item(r, diffs=None):
         s = f"• <a href=\"{post_link(r['message_id'])}\">{html.escape(first_line(r['text'], 50))}</a>\n" \
             f"   {html.escape(PB.place_str(r))} · {html.escape(PB.salary_str(r))}"

@@ -19,11 +19,13 @@ YC_KEY = os.environ.get("YANDEX_API_KEY", "").strip()
 YC_FOLDER = os.environ.get("YANDEX_FOLDER_ID", "").strip()
 YC_MODEL = os.environ.get("YANDEX_MODEL", "yandexgpt-lite/latest")
 
+MOSCOW = "Москва"
+
 # Города МО — те же, что на сайте (/rabota/...).
 CITIES = [
     "Апрелевка", "Балашиха", "Бронницы", "Верея", "Видное", "Волоколамск", "Воскресенск",
     "Высоковск", "Голицыно", "Дедовск", "Дзержинский", "Дмитров", "Долгопрудный", "Домодедово",
-    "Дрезна", "Дубна", "Егорьевск", "Железнодорожный", "Жуковский", "Зарайск", "Звенигород",
+    "Дрезна", "Дубна", "Егорьевск", "Жуковский", "Зарайск", "Звенигород",
     "Ивантеевка", "Истра", "Кашира", "Клин", "Коломна", "Королёв", "Котельники", "Красноармейск",
     "Красногорск", "Краснозаводск", "Краснознаменск", "Кубинка", "Куровское", "Ликино-Дулёво",
     "Лобня", "Лосино-Петровский", "Луховицы", "Лыткарино", "Люберцы", "Можайск", "Мытищи",
@@ -33,7 +35,6 @@ CITIES = [
     "Химки", "Хотьково", "Чехов", "Черноголовка", "Шатура", "Щёлково", "Электрогорск",
     "Электросталь", "Электроугли", "Яхрома",
 ]
-MOSCOW = "Москва"
 
 # Особые формы, где «корень + окончание» даёт ложные совпадения (Клин → клиника).
 _SPECIAL = {
@@ -71,8 +72,16 @@ CITY_RES = [(c, _city_re(c)) for c in CITIES]
 CITY_BY_NORM = {_norm(c): c for c in CITIES}
 
 
+# районы и бывшие города, которые входят в другие
+ALIASES = [(re.compile(r"\bжелезнодорожн", re.I), "Балашиха"),
+           (re.compile(r"\bсколков|\bновая москва|\bкоммунарк|\bзеленоград", re.I), MOSCOW)]
+
+
 def find_city(text):
     t = _norm(text)
+    for rx, name in ALIASES:
+        if rx.search(t):
+            return name
     for name, rx in CITY_RES:
         if rx.search(t):
             return name
@@ -220,10 +229,14 @@ def parse_schedule(text):
     t = _norm(text)
     if re.search(r"\b2\s*/\s*2\b|\b2\s*через\s*2\b", t):
         return "2/2"
+    if re.search(r"\b3\s*/\s*3\b|\b3\s*через\s*3\b|\b4\s*/\s*4\b", t):
+        return "3/3"
     if re.search(r"\b5\s*/\s*2\b", t):
         return "5/2"
     if re.search(r"подработ|разов|на выходные|частичн", t):
         return "parttime"
+    if re.search(r"гибкий|свободный график|выбираешь смены|сам выбираешь|удобный график", t):
+        return "flexible"
     if re.search(r"сменн|посменн|сменами|гибкий график|свободный график", t):
         return "shifts"
     return None
@@ -238,7 +251,14 @@ def parse_noexp(text):
     return None
 
 
-SCHEDULES = {"2/2": "2/2", "5/2": "5/2", "shifts": "сменный", "parttime": "подработка"}
+SCHEDULES = {"2/2": "2/2", "3/3": "3/3", "5/2": "5/2", "shifts": "сменный", "flexible": "гибкий график",
+             "parttime": "подработка"}
+# что выбирает соискатель → какие графики вакансий ему подходят
+WANT_SCHEDULE = {
+    "shift": {"2/2", "3/3", "shifts", "flexible"},   # сменный, полная занятость
+    "52": {"5/2"},                                   # пятидневка
+    "part": {"parttime", "flexible"},                # подработка, пара смен в неделю
+}
 
 
 def parse_rules(text, tags, prof_keys):
@@ -275,10 +295,14 @@ GPT_SYSTEM = (
     ' "metro": станция метро/МЦК/МЦД или null,\n'
     ' "salary_min": число в рублях или null, "salary_max": число в рублях или null,\n'
     ' "salary_unit": "shift" (за смену/выход) | "hour" | "month" | null,\n'
-    ' "schedule": "2/2" | "5/2" | "shifts" | "parttime" | null,\n'
+    ' "schedule": "2/2" | "3/3" | "5/2" | "shifts" (другой сменный) | "flexible" (гибкий, смены выбираешь сам) '
+    '| "parttime" (подработка, разовые смены) | null,\n'
     ' "no_experience": true если берут без опыта / обучают, false если опыт обязателен, иначе null}\n'
     "Правила: «6-8 тыс.» = 6000 и 8000; «4500 т.р» = 4500; «от 130 тысяч в месяц» = salary_min 130000, month. "
-    "Чаевые и проценты не прибавляй. Ничего не выдумывай: нет данных — null."
+    "Чаевые и проценты не прибавляй. "
+    "Город определяй по любым подсказкам: адрес, улица, район, метро, МЦК, МЦД, торговый центр, известное место "
+    "(улицы, районы и станции Москвы → «Москва»; Сколково, Новая Москва → «Москва»; Железнодорожный → «Балашиха»). "
+    "Если в тексте только название заведения без адреса — city null. Ничего не выдумывай: нет данных — null."
 )
 
 
@@ -501,11 +525,12 @@ def match(con, q, days=7, limit=8):
         if q.get("exp") == "none" and r["noexp"] == 0:
             diffs.append("нужен опыт")
         sch = q.get("schedule", "any")
-        if sch != "any" and r["schedule"] and r["schedule"] != sch:
+        if sch in WANT_SCHEDULE and r["schedule"] and r["schedule"] not in WANT_SCHEDULE[sch]:
             diffs.append(f"график {SCHEDULES.get(r['schedule'], r['schedule'])}")
         (exact if not diffs else near).append((r, diffs))
     # новичкам первыми — те, где явно берут без опыта
     if q.get("exp") == "none":
         exact.sort(key=lambda x: 0 if x[0]["noexp"] == 1 else 1)
-    near.sort(key=lambda x: len(x[1]))
+    # среди «близких» первыми — те, что в нужном месте
+    near.sort(key=lambda x: (any(d.startswith(("не Москва", "в другом месте", "место")) for d in x[1]), len(x[1])))
     return exact[:limit], near[:max(0, limit - len(exact))][:3]

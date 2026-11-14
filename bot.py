@@ -628,7 +628,7 @@ def pb_q_sched(chat_id, mid):
 
 def pb_result_kb(sub_state="none"):
     """sub_state: none — не подписан; same — подписан на этот запрос; other — подписан на другой."""
-    bell = {"none": ("🔔 Сообщать о новых", "sb:on"),
+    bell = {"none": ("🔔 Сообщать о новых под запрос", "sb:on"),
             "same": ("🔕 Отписаться", "sb:off"),
             "other": ("🔔 Сообщать по этому", "sb:on")}[sub_state]
     return kb([
@@ -955,7 +955,7 @@ def on_testrass(con, msg):
     uid, chat = msg["from"]["id"], msg["chat"]["id"]
     sub = con.execute("SELECT * FROM subs WHERE user_id=? AND active=1", (uid,)).fetchone()
     if not sub:
-        send(chat, "Сначала подпишись: /start → «🔎 Подобрать вакансии» → «🔔 Сообщать о новых».")
+        send(chat, "Сначала подпишись: /start → «🔎 Подобрать вакансии» → «🔔 Сообщать о новых под запрос».")
         return
     q = json.loads(sub["query"])
     exact, near = PB.match(con, q, days=30)

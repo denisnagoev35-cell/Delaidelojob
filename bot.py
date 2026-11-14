@@ -295,10 +295,13 @@ def podbor_allowed(uid):
 
 def professions_kb(uid=None):
     keys = list(T.PROFESSIONS)
-    rows = [[PODBOR_BTN]] if uid is not None and podbor_allowed(uid) else []
+    rows = []
     for i in range(0, len(keys), 2):
         rows.append([(f"{T.PROFESSIONS[k]['emoji']} {T.PROFESSIONS[k]['name']}", f"p:{k}")
                      for k in keys[i:i + 2]])
+    # подборка — под профессиями: кто пришёл с рекламы «узнай зарплату», сначала видит профессии
+    if uid is not None and podbor_allowed(uid):
+        rows.append([PODBOR_BTN])
     rows.append([("🏪 Я работодатель", "emp")])
     return kb(rows)
 

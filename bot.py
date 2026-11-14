@@ -258,8 +258,12 @@ PODBOR_FOR_ALL = os.environ.get("PODBOR_FOR_ALL", "") == "1"
 PODBOR_BTN = ("🔎 Подобрать вакансии под меня", "pb:start")
 
 
+# Тестировщики: видят подборку и рассылку как обычные пользователи, без команд админа и служебных вопросов.
+TESTER_IDS = {int(x) for x in os.environ.get("TESTER_IDS", "").replace(" ", "").split(",") if x}
+
+
 def podbor_allowed(uid):
-    return PODBOR_FOR_ALL or uid in ADMIN_IDS
+    return PODBOR_FOR_ALL or uid in ADMIN_IDS or uid in TESTER_IDS
 
 
 def professions_kb(uid=None):

@@ -472,12 +472,10 @@ def salary_str(r):
     lo, hi, u = r["sal_min"], r["sal_max"], r["unit"]
     if not (lo or hi):
         return "ставка не указана"
-    if lo and hi:
+    if lo and hi and lo != hi:
         s = f"{money(lo)}–{money(hi)}"
-    elif lo:
-        s = f"от {money(lo)}"
-    else:
-        s = f"до {money(hi)}"
+    elif lo or hi:
+        s = money(lo or hi) if lo == hi else (f"от {money(lo)}" if lo else f"до {money(hi)}")
     return f"{s} {UNIT_TXT.get(u, '₽')}"
 
 

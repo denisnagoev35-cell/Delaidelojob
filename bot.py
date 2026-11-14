@@ -672,7 +672,7 @@ def pb_result(con, st):
             s += f"\n   <i>{html.escape('; '.join(diffs))}</i>"
         return s
     show_exact = exact[:PB_MAX]
-    show_near = near[:max(0, PB_MAX - len(show_exact))][:PB_NEAR]
+    show_near = near[:max(PB_NEAR, PB_MAX - len(show_exact))] if len(show_exact) < PB_MAX else []
     if exact:
         lines.append(f"✅ <b>{plural(len(exact), 'Нашлась', 'Нашлись', 'Нашлись')} {len(exact)} "
                      f"{plural(len(exact), 'вакансия', 'вакансии', 'вакансий')}</b> — "
@@ -682,9 +682,11 @@ def pb_result(con, st):
     else:
         lines.append("😕 За 7 дней вакансий точно под твой запрос нет.")
     if show_near:
-        lines += ["", f"🔸 <b>Похожие, но не всё совпадает</b> "
-                      f"({len(show_near)}{' из ' + str(len(near)) if len(near) > len(show_near) else ''}):"]
+        lines += ["", "🔸 <b>Похожие, но не всё совпадает:</b>"]
         lines += [item(r, d) for r, d in show_near]
+        if len(near) > len(show_near):
+            rest = len(near) - len(show_near)
+            lines.append(f"<i>…и ещё {rest} {plural(rest, 'похожая', 'похожие', 'похожих')}.</i>")
     if not exact:
         lines += ["", "Попробуй изменить место, ставку или график кнопками ниже. "
                       f"Новые вакансии выходят в канале каждый день — хэштег {p['tag']}."]

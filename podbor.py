@@ -270,7 +270,7 @@ def parse_rules(text, tags, prof_keys):
     if not city and (metro or MOSCOW_RE.search(text)):
         city = MOSCOW
     out["city"] = city
-    out["metro"] = metro.group(1).strip() if metro else None
+    out["metro"] = clean_metro(metro.group(1)) if metro else None
     out.update(parse_salary(text) or {"sal_min": None, "sal_max": None, "unit": None})
     out["schedule"] = parse_schedule(text)
     out["noexp"] = parse_noexp(text)
@@ -358,6 +358,13 @@ def extract_json(answer):
     return None
 
 
+def clean_metro(m):
+    """«м. Академическая или м. Ленинский проспект» → «Академическая, Ленинский проспект»."""
+    m = re.sub(r"(?i)\b(?:ст\.\s*)?(?:м\.|метро|мцк|мцд)\s*", "", m or "")
+    parts = [x.strip(" .,;") for x in re.split(r"\s+или\s+|[,/;]", m) if x.strip(" .,;")]
+    return ", ".join(parts[:2])[:60] or None
+
+
 def _int(v):
     try:
         v = int(float(str(v).replace(" ", "").replace(",", ".")))
@@ -377,7 +384,7 @@ def from_gpt(g, prof_keys):
     if city:
         out["city"] = city
     if g.get("metro"):
-        out["metro"] = str(g["metro"])[:40]
+        out["metro"] = clean_metro(str(g["metro"]))
         out.setdefault("city", MOSCOW)
     unit = g.get("salary_unit") if g.get("salary_unit") in LIMITS else None
     lo, hi = _int(g.get("salary_min")), _int(g.get("salary_max"))
@@ -486,7 +493,7 @@ def salary_str(r):
 
 def place_str(r):
     if r["city"] == MOSCOW and r["metro"]:
-        return f"м. {r['metro']}"
+        return f"м. {clean_metro(r['metro']) or r['metro']}"
     return r["city"] or "место не указано"
 
 
@@ -512,19 +519,19 @@ def compare(r, q):
     if place != "any" and not r["city"]:
         diffs.append("место не указано")
     elif place == "msk" and r["city"] != MOSCOW:
-        diffs.append(f"не Москва — {r['city']}")
+        diffs.append("не Москва")
     elif place not in ("any", "msk") and r["city"] != place:
-        diffs.append(f"в другом месте — {place_str(r)}")
+        diffs.append("другое место")
     want = q.get("salary") or 0
     if want and r["shift_eq"] is None:
         diffs.append("ставка не указана")
     elif want and r["shift_eq"] < want:
-        diffs.append(f"ставка ниже — {salary_str(r)}")
+        diffs.append("ставка ниже")
     if q.get("exp") == "none" and r["noexp"] == 0:
         diffs.append("нужен опыт")
     sch = q.get("schedule", "any")
     if sch in WANT_SCHEDULE and r["schedule"] and r["schedule"] not in WANT_SCHEDULE[sch]:
-        diffs.append(f"график {SCHEDULES.get(r['schedule'], r['schedule'])}")
+        diffs.append(f"график {SCHEDULES.get(r['schedule'], r['schedule'])}")  # графика в строке нет
     return diffs
 
 
@@ -543,5 +550,5 @@ def match(con, q, days=7):
     if q.get("exp") == "none":
         exact.sort(key=lambda x: 0 if x[0]["noexp"] == 1 else 1)
     # среди «близких» первыми — те, что в нужном месте
-    near.sort(key=lambda x: (any(d.startswith(("не Москва", "в другом месте", "место")) for d in x[1]), len(x[1])))
+    near.sort(key=lambda x: (any(d in ("не Москва", "другое место", "место не указано") for d in x[1]), len(x[1])))
     return exact, near

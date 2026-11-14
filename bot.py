@@ -273,7 +273,7 @@ def is_subscribed(uid):
 # Вход в подборку для обычного пользователя — кнопкой, без команд.
 # Пока тест: кнопку видят только админы. Открыть всем — PODBOR_FOR_ALL=1 в /etc/ddbot.env.
 PODBOR_FOR_ALL = os.environ.get("PODBOR_FOR_ALL", "") == "1"
-PODBOR_BTN = ("🔎 Подобрать вакансии под меня", "pb:start")
+PODBOR_BTN = ("🔎 Подобрать вакансии", "pb:start")
 
 
 # Тестировщики: видят подборку и рассылку как обычные пользователи, без команд админа и служебных вопросов.
@@ -628,9 +628,9 @@ def pb_q_sched(chat_id, mid):
 
 def pb_result_kb(sub_state="none"):
     """sub_state: none — не подписан; same — подписан на этот запрос; other — подписан на другой."""
-    bell = {"none": ("🔔 Присылать новые вакансии", "sb:on"),
-            "same": ("🔕 Отписаться от рассылки", "sb:off"),
-            "other": ("🔔 Присылать по этому запросу", "sb:on")}[sub_state]
+    bell = {"none": ("🔔 Сообщать о новых", "sb:on"),
+            "same": ("🔕 Отписаться", "sb:off"),
+            "other": ("🔔 Сообщать по этому", "sb:on")}[sub_state]
     return kb([
         [bell],
         [("📍 Место", "pb:c:w"), ("💰 Ставка", "pb:c:s")],
@@ -955,7 +955,7 @@ def on_testrass(con, msg):
     uid, chat = msg["from"]["id"], msg["chat"]["id"]
     sub = con.execute("SELECT * FROM subs WHERE user_id=? AND active=1", (uid,)).fetchone()
     if not sub:
-        send(chat, "Сначала подпишись: /start → «🔎 Подобрать вакансии под меня» → «🔔 Присылать…».")
+        send(chat, "Сначала подпишись: /start → «🔎 Подобрать вакансии» → «🔔 Сообщать о новых».")
         return
     q = json.loads(sub["query"])
     exact, near = PB.match(con, q, days=30)

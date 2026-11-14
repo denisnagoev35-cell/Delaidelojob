@@ -239,6 +239,19 @@ def post_link(message_id):
     return f"https://t.me/{u}/{message_id}" if u else CHANNEL_INVITE
 
 
+def vac_title(text, limit=60):
+    """Заголовок вакансии для списков: название заведения без ставки и адреса, обрезка по словам."""
+    line = first_line(text, 500)
+    head = re.split(r"\s+[|•·]\s+|\s+[—–-]\s+(?=\d|от\s|до\s)|,\s+(?=м\.|метро|\d|от\s|до\s)", line)[0]
+    head = head.strip(" ,.;:—–-")
+    if len(head) >= 6:
+        line = head
+    if len(line) > limit:
+        cut = line[:limit].rsplit(" ", 1)[0].rstrip(" ,.;:—–-(")
+        line = cut + "…"
+    return line
+
+
 def first_line(text, limit=70):
     for line in text.splitlines():
         line = HASHTAG_RE.sub("", line).strip(" •-—*_")
@@ -615,9 +628,9 @@ def pb_q_sched(chat_id, mid):
 
 def pb_result_kb(sub_state="none"):
     """sub_state: none — не подписан; same — подписан на этот запрос; other — подписан на другой."""
-    bell = {"none": ("🔔 Присылать новые вакансии под этот запрос", "sb:on"),
+    bell = {"none": ("🔔 Присылать новые вакансии", "sb:on"),
             "same": ("🔕 Отписаться от рассылки", "sb:off"),
-            "other": ("🔔 Присылать по этому запросу (вместо старого)", "sb:on")}[sub_state]
+            "other": ("🔔 Присылать по этому запросу", "sb:on")}[sub_state]
     return kb([
         [bell],
         [("📍 Место", "pb:c:w"), ("💰 Ставка", "pb:c:s")],
@@ -731,7 +744,7 @@ def pb_result(con, st):
         extra.append(PB_SCHED_NAMES.get(st["schedule"], ""))
     lines = [head, "<i>" + html.escape(" · ".join(x for x in extra if x)) + "</i>", ""]
     def item(r, diffs=None):
-        s = f"• <a href=\"{post_link(r['message_id'])}\">{html.escape(first_line(r['text'], 50))}</a>\n" \
+        s = f"• <a href=\"{post_link(r['message_id'])}\">{html.escape(vac_title(r['text']))}</a>\n" \
             f"   {html.escape(PB.place_str(r))} · {html.escape(PB.salary_str(r))}"
         if diffs:
             s += f"\n   <i>{html.escape('; '.join(diffs))}</i>"
@@ -787,7 +800,7 @@ def query_title(q):
 
 
 def vac_line(r):
-    s = f"<a href=\"{post_link(r['message_id'])}\">{html.escape(first_line(r['text'], 50))}</a>\n" \
+    s = f"<a href=\"{post_link(r['message_id'])}\">{html.escape(vac_title(r['text']))}</a>\n" \
         f"📍 {html.escape(PB.place_str(r))} · 💰 {html.escape(PB.salary_str(r))}"
     if r["schedule"]:
         s += f" · 🕒 {html.escape(PB.SCHEDULES.get(r['schedule'], r['schedule']))}"

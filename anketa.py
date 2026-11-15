@@ -76,7 +76,8 @@ def st_set(con, key, d):
 
 def waiting(con, uid):
     """Ждём ли от человека текст/фото/контакт для анкеты или для запроса контакта."""
-    return bool(st_get(con, f"an:{uid}").get("wait") or st_get(con, f"ac:{uid}").get("wait"))
+    return bool(st_get(con, f"an:{uid}").get("wait") or st_get(con, f"ac:{uid}").get("wait")
+                or st_get(con, f"ae:{uid}").get("wait"))
 
 
 # ---------- тексты ----------
@@ -310,6 +311,8 @@ def on_message(con, msg):
     chat = msg["chat"]["id"]
     if st_get(con, f"ac:{uid}").get("wait"):
         return req_message(con, msg)
+    if st_get(con, f"ae:{uid}").get("wait") == "city":
+        return emp_city(con, msg)
     d = st_get(con, f"an:{uid}")
     w = d.get("wait")
     if not w:
@@ -421,6 +424,10 @@ def publish(con, uid, chat_id, d):
         con.commit()
     st_set(con, f"an:{uid}", None)
     B.event(con, uid, "anketa_pub", str(aid))
+    try:
+        emp_notify(con, aid)
+    except Exception:
+        B.log.exception("emp_notify %s", aid)
     where = "тебе в личку (тестовый режим)" if test_mode() else "в чате @delaijobchat"
     B.send(chat_id, f"✅ <b>Анкета опубликована</b> {where}.\n\n"
                     "Когда заведение нажмёт «Связаться», я сразу сообщу, кто интересуется.\n\n"
@@ -469,7 +476,7 @@ def req_start(con, uid, chat_id, aid):
     d = json.loads(row["data"])
     B.send(chat_id, f"📩 <b>Контакт кандидата</b>\n<i>{html.escape(prof_name(d.get('prof'), d))} · "
                     f"{html.escape(place_name(d))}</i>\n\n"
-                    "Напиши название заведения — кандидат увидит, кто им интересуется, и будет ждать сообщения.",
+                    "Напишите название заведения — кандидат увидит, кто им интересуется, и будет ждать сообщения.",
            B.kb([[("Отмена", "an:req:cancel")]]))
 
 
@@ -479,7 +486,7 @@ def req_message(con, msg):
     s = st_get(con, f"ac:{uid}")
     venue = (msg.get("text") or "").strip()
     if not (2 <= len(venue) <= 60) or LINK_RE.search(venue):
-        B.send(chat, "Напиши просто название заведения, например: <b>Кофейня «Зерно»</b>")
+        B.send(chat, "Напишите просто название заведения, например: <b>Кофейня «Зерно»</b>")
         return True
     row = con.execute("SELECT * FROM anketa WHERE id=?", (s.get("aid"),)).fetchone()
     st_set(con, f"ac:{uid}", None)
@@ -493,8 +500,8 @@ def req_message(con, msg):
     B.send(chat, f"✅ <b>Контакт кандидата</b>\n\n"
                  f"👤 {html.escape(d.get('name', ''))} — {html.escape(prof_name(d.get('prof'), d))}, "
                  f"{html.escape(place_name(d))}\n📞 {contact_str(d)}\n\n"
-                 f"Напиши кандидату и представься: «{html.escape(venue)}, по анкете в чате Делай Дело». "
-                 f"Мы уже предупредили, что ты напишешь.")
+                 f"Напишите кандидату и представьтесь: «{html.escape(venue)}, по анкете в чате Делай Дело». "
+                 f"Мы уже предупредили, что вы напишете.")
     try:
         B.send(row["user_id"], f"👀 <b>Твоей анкетой заинтересовались!</b>\n\n"
                                f"Заведение: <b>{html.escape(venue)}</b>. Скоро напишут"
@@ -557,4 +564,276 @@ def admin_list(con, chat_id):
         d = json.loads(r["data"])
         lines.append(f"№{r['id']} · {html.escape(prof_name(d.get('prof'), d))} · {html.escape(place_name(d))} · "
                      f"{html.escape(d.get('name', ''))} {contact_str(d)}")
+    B.send(chat_id, "\n".join(lines))
+
+
+# ---------- работодатель: подборка анкет и рассылка новых ----------
+# EMP_MODE=test — только ADMIN_IDS/TESTER_IDS; on — все; пусто — выключено.
+
+EMP_MODE = os.environ.get("EMP_MODE", "").strip().lower()
+EMP_DAYS = 30            # анкеты не старше
+EMP_LIST_MAX = 8         # сколько анкет в одной выдаче
+EMP_DAILY_MAX = 10       # новых анкет в день отдельными сообщениями, остальное — сводкой
+EMP_QUIET = (22, 10)     # с 22:00 до 10:00 МСК копим
+EMP_DIGEST_HOURS = (10, 20)
+
+EMP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS emp_subs(
+  user_id INTEGER PRIMARY KEY, query TEXT, active INTEGER DEFAULT 1, created INTEGER,
+  day TEXT, sent_today INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS emp_queue(user_id INTEGER, anketa_id INTEGER, ts INTEGER,
+  PRIMARY KEY(user_id, anketa_id));
+"""
+SCHEMA += EMP_SCHEMA
+
+
+def emp_allowed(uid):
+    if EMP_MODE == "on":
+        return True
+    return EMP_MODE == "test" and (uid in B.ADMIN_IDS or uid in B.TESTER_IDS)
+
+
+def emp_q_title(q):
+    prof = q.get("prof") or "any"
+    p = "Все профессии" if prof == "any" else prof_name(prof, {"prof_text": "Другие профессии"})
+    pl = {"msk": "Москва", "any": "Москва и МО"}.get(q.get("place"), q.get("place") or "Москва и МО")
+    return f"{p} · {pl}"
+
+
+def emp_kb_prof():
+    rows = [[(prof_name(k), f"ae:p:{k}") for k in PROF_KEYS[i:i + 2]] for i in range(0, len(PROF_KEYS), 2)]
+    rows.append([(f"{OTHER_EMOJI} Другие", "ae:p:other"), ("Все профессии", "ae:p:any")])
+    return B.kb(rows)
+
+
+def emp_kb_place():
+    return B.kb([[("Москва", "ae:w:msk"), ("Подмосковье", "ae:w:mo")], [("Москва и МО", "ae:w:any")]])
+
+
+def emp_matches(row_data, q):
+    if q.get("prof") not in (None, "any") and row_data.get("prof") != q["prof"]:
+        return False
+    want, have = q.get("place") or "any", row_data.get("place") or "any"
+    if want == "any" or have == "any":
+        return True
+    return want == have
+
+
+def emp_find(con, q):
+    since = int(time.time()) - EMP_DAYS * 86400
+    out = []
+    for r in con.execute("SELECT * FROM anketa WHERE active=1 AND created>=? ORDER BY id DESC", (since,)).fetchall():
+        d = json.loads(r["data"])
+        if emp_matches(d, q):
+            out.append((r, d))
+    return out
+
+
+def emp_line(r, d):
+    sal = d.get("salary") or 0
+    sched = d.get("sched")
+    parts = [B.T.EXPERIENCE.get(d.get("exp"), ""), "от " + B.PB.money(sal) + " ₽/смена" if sal else "ставка — договоримся",
+             "любой график" if sched in (None, "any") else SCHED_NAMES.get(sched, "")]
+    s = (f"<b>№{r['id']} · {html.escape(prof_name(d.get('prof'), d))}</b> · {html.escape(place_name(d))}"
+         f"{' · 📸' if d.get('photo') else ''}\n   " + html.escape(" · ".join(x for x in parts if x)))
+    if d.get("about"):
+        a = d["about"] if len(d["about"]) <= 120 else d["about"][:117].rsplit(" ", 1)[0] + "…"
+        s += f"\n   <i>{html.escape(a)}</i>"
+    return s
+
+
+def emp_sub_state(con, uid, q):
+    r = con.execute("SELECT query, active FROM emp_subs WHERE user_id=?", (uid,)).fetchone()
+    if not r or not r["active"]:
+        return "none"
+    return "same" if json.loads(r["query"]) == q else "other"
+
+
+def emp_show(con, uid, chat_id, mid, q):
+    found = emp_find(con, q)
+    lines = [f"📋 <b>Анкеты: {html.escape(emp_q_title(q))}</b>", f"<i>за {EMP_DAYS} дней, свежие сверху</i>", ""]
+    shown = found[:EMP_LIST_MAX]
+    if shown:
+        lines += [emp_line(r, d) + "\n" for r, d in shown]
+        if len(found) > len(shown):
+            lines.append(f"<i>…и ещё {len(found) - len(shown)} в чате @delaijobchat</i>")
+    else:
+        lines.append("😕 Пока анкет под этот запрос нет. Включите уведомления — пришлём, как только появится.")
+    state = emp_sub_state(con, uid, q)
+    if state == "same":
+        lines.append("🔔 <i>Уведомления включены: новые анкеты под этот запрос бот пришлёт сам.</i>")
+    rows = []
+    btns = [(f"📩 Связаться №{r['id']}", f"ae:c:{r['id']}") for r, _ in shown]
+    rows += [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    rows.append([{"none": ("🔔 Присылать новые анкеты", "ae:on"), "same": ("🔕 Выключить уведомления", "ae:off"),
+                  "other": ("🔔 Присылать по этому запросу", "ae:on")}[state]])
+    rows.append([("⚙️ Изменить запрос", "ae:new")])
+    B.edit(chat_id, mid, "\n".join(lines), B.kb(rows))
+    B.event(con, uid, "emp_list", json.dumps(q, ensure_ascii=False))
+
+
+def emp_start(con, uid, chat_id):
+    st_set(con, f"ae:{uid}", {})
+    B.send(chat_id, "📋 <b>Анкеты кандидатов</b>\n\nСоискатели оставляют анкеты в чате @delaijobchat. "
+                    "Выберите, кого ищете, — покажу свежие анкеты, а контакт кандидата отдам по кнопке «Связаться».\n\n"
+                    "Кого ищете?", emp_kb_prof())
+
+
+def emp_callback(con, uid, chat_id, mid, data):
+    st = st_get(con, f"ae:{uid}")
+    parts = data.split(":", 2)
+    step = parts[1] if len(parts) > 1 else ""
+    val = parts[2] if len(parts) > 2 else ""
+    if step == "start" or step == "new":
+        st_set(con, f"ae:{uid}", {})
+        B.edit(chat_id, mid, "📋 <b>Анкеты кандидатов</b>\n\nКого ищете?", emp_kb_prof())
+        return
+    if step == "p" and (val in PROF_KEYS or val in ("other", "any")):
+        st = {"prof": val}
+        B.edit(chat_id, mid, "📍 Где заведение?", emp_kb_place())
+    elif step == "w" and "prof" in st:
+        if val == "mo":
+            st["wait"] = "city"
+            B.edit(chat_id, mid, "🏙 Напишите город, например: <b>Химки</b>")
+        else:
+            st["place"] = val
+            st["done"] = True
+            emp_show(con, uid, chat_id, mid, {"prof": st["prof"], "place": val})
+    elif step == "c" and val.isdigit():
+        req_start(con, uid, chat_id, int(val))
+    elif step == "on" and st.get("done"):
+        q = {"prof": st["prof"], "place": st["place"]}
+        con.execute("INSERT INTO emp_subs(user_id, query, active, created, day, sent_today) VALUES(?,?,1,?,'',0) "
+                    "ON CONFLICT(user_id) DO UPDATE SET query=excluded.query, active=1",
+                    (uid, json.dumps(q, ensure_ascii=False), int(time.time())))
+        con.commit()
+        B.event(con, uid, "emp_sub_on", json.dumps(q, ensure_ascii=False))
+        emp_show(con, uid, chat_id, mid, q)
+        B.send(chat_id, f"🔔 <b>Готово!</b> Новые анкеты «{html.escape(emp_q_title(q))}» пришлю сюда, как только появятся.\n\n"
+                        f"Не больше {EMP_DAILY_MAX} в день, ночью не беспокою — утром пришлю сводку.")
+    elif step == "off":
+        con.execute("UPDATE emp_subs SET active=0 WHERE user_id=?", (uid,))
+        con.execute("DELETE FROM emp_queue WHERE user_id=?", (uid,))
+        con.commit()
+        B.event(con, uid, "emp_sub_off")
+        if st.get("done"):
+            emp_show(con, uid, chat_id, mid, {"prof": st["prof"], "place": st["place"]})
+        else:
+            B.edit(chat_id, mid, "🔕 Уведомления об анкетах выключены.", B.kb([[("📋 Анкеты кандидатов", "ae:start")]]))
+    else:
+        B.edit(chat_id, mid, "Давайте начнём заново 🙂", B.kb([[("📋 Анкеты кандидатов", "ae:start")]]))
+        return
+    st_set(con, f"ae:{uid}", st)
+
+
+def emp_city(con, msg):
+    uid, chat = msg["from"]["id"], msg["chat"]["id"]
+    st = st_get(con, f"ae:{uid}")
+    city = B.PB.canon_city((msg.get("text") or "").strip())
+    if not city:
+        B.send(chat, "Не нашёл такой город в МО 🙈 Напишите как на карте, например: Красногорск")
+        return True
+    st.pop("wait", None)
+    st["place"] = "msk" if city == B.PB.MOSCOW else city
+    st["done"] = True
+    st_set(con, f"ae:{uid}", st)
+    m = B.send(chat, "…")
+    emp_show(con, uid, chat, m["message_id"], {"prof": st["prof"], "place": st["place"]})
+    return True
+
+
+def emp_card_kb(aid):
+    return B.kb([[("📩 Связаться", f"ae:c:{aid}")],
+                 [("⚙️ Изменить запрос", "ae:new"), ("🔕 Выключить", "ae:off")]])
+
+
+def emp_deliver(con, sub, row, d, force=False):
+    now = B.msk_now()
+    today = time.strftime("%Y-%m-%d", now)
+    sent = sub["sent_today"] if sub["day"] == today else 0
+    quiet = (now.tm_hour >= EMP_QUIET[0] or now.tm_hour < EMP_QUIET[1]) and EMP_MODE != "test"
+    if not force and (quiet or sent >= EMP_DAILY_MAX):
+        con.execute("INSERT OR IGNORE INTO emp_queue VALUES(?,?,?)", (sub["user_id"], row["id"], int(time.time())))
+        con.commit()
+        return "queued"
+    q = json.loads(sub["query"])
+    text = f"🆕 <b>Новая анкета</b> · <i>{html.escape(emp_q_title(q))}</i>\n\n" + public_text(d)
+    try:
+        if d.get("photo"):
+            B.tg("sendPhoto", chat_id=sub["user_id"], photo=d["photo"], caption=text, parse_mode="HTML",
+                 reply_markup=emp_card_kb(row["id"]))
+        else:
+            B.send(sub["user_id"], text, emp_card_kb(row["id"]))
+    except B.TgError as e:
+        B.log.warning("emp_deliver %s: %s", sub["user_id"], e)
+        if "blocked" in str(e) or "deactivated" in str(e):
+            con.execute("UPDATE emp_subs SET active=0 WHERE user_id=?", (sub["user_id"],))
+            con.commit()
+        return "error"
+    con.execute("UPDATE emp_subs SET day=?, sent_today=? WHERE user_id=?", (today, sent + 1, sub["user_id"]))
+    con.commit()
+    B.event(con, sub["user_id"], "emp_sent", str(row["id"]))
+    return "sent"
+
+
+def emp_notify(con, aid):
+    if EMP_MODE not in ("test", "on"):
+        return
+    row = con.execute("SELECT * FROM anketa WHERE id=? AND active=1", (aid,)).fetchone()
+    if not row:
+        return
+    d = json.loads(row["data"])
+    for sub in con.execute("SELECT * FROM emp_subs WHERE active=1").fetchall():
+        if sub["user_id"] == row["user_id"] or not emp_allowed(sub["user_id"]):
+            continue
+        if emp_matches(d, json.loads(sub["query"])):
+            emp_deliver(con, sub, row, d)
+
+
+def emp_digest(con, uid, force=False):
+    rows = con.execute("SELECT a.* FROM emp_queue q JOIN anketa a ON a.id=q.anketa_id "
+                       "WHERE q.user_id=? AND a.active=1 ORDER BY a.id DESC", (uid,)).fetchall()
+    sub = con.execute("SELECT * FROM emp_subs WHERE user_id=?", (uid,)).fetchone()
+    con.execute("DELETE FROM emp_queue WHERE user_id=?", (uid,))
+    con.commit()
+    if not rows or not sub or not (sub["active"] or force):
+        return
+    q = json.loads(sub["query"])
+    n = len(rows)
+    lines = [f"🆕 <b>{n} {B.plural(n, 'новая анкета', 'новые анкеты', 'новых анкет')}</b> · "
+             f"<i>{html.escape(emp_q_title(q))}</i>", ""]
+    shown = rows[:10]
+    lines += [emp_line(r, json.loads(r["data"])) + "\n" for r in shown]
+    btns = [(f"📩 Связаться №{r['id']}", f"ae:c:{r['id']}") for r in shown]
+    kbrows = [btns[i:i + 2] for i in range(0, len(btns), 2)] + [[("⚙️ Изменить запрос", "ae:new"), ("🔕 Выключить", "ae:off")]]
+    B.send(uid, "\n".join(lines), B.kb(kbrows))
+    B.event(con, uid, "emp_digest", str(n))
+
+
+def emp_tick(con):
+    if EMP_MODE not in ("test", "on"):
+        return
+    now = B.msk_now()
+    if now.tm_hour not in EMP_DIGEST_HOURS:
+        return
+    slot = time.strftime("%Y-%m-%d ", now) + str(now.tm_hour)
+    done = con.execute("SELECT value FROM state WHERE key='emp_digest_slot'").fetchone()
+    if done and done["value"] == slot:
+        return
+    con.execute("INSERT INTO state(key, value) VALUES('emp_digest_slot', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (slot,))
+    con.commit()
+    for r in con.execute("SELECT DISTINCT user_id FROM emp_queue").fetchall():
+        try:
+            emp_digest(con, r["user_id"])
+        except Exception:
+            B.log.exception("emp_digest %s", r["user_id"])
+
+
+def admin_empsubs(con, chat_id):
+    rows = con.execute("SELECT * FROM emp_subs ORDER BY created DESC LIMIT 30").fetchall()
+    q = con.execute("SELECT COUNT(*) c FROM emp_queue").fetchone()["c"]
+    lines = [f"🏪 Подписок работодателей: {sum(r['active'] for r in rows)} активных из {len(rows)}; в очереди: {q}"]
+    lines += [f"• {r['user_id']}: {html.escape(emp_q_title(json.loads(r['query'])))}{'' if r['active'] else ' (выкл.)'}"
+              for r in rows]
     B.send(chat_id, "\n".join(lines))

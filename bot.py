@@ -412,6 +412,8 @@ def on_callback(con, cq):
         AN.start(con, uid, chat_id)
     elif data.startswith("an:req:"):
         AN.req_callback(con, uid, chat_id, mid, data)
+    elif data.startswith("ae:") and AN.emp_allowed(uid):
+        AN.emp_callback(con, uid, chat_id, mid, data)
     elif data.startswith("an:") and AN.allowed(uid):
         AN.callback(con, cq, uid, chat_id, mid, data)
     elif data.startswith("sb:") and podbor_allowed(uid):
@@ -440,8 +442,9 @@ def on_callback(con, cq):
         edit(chat_id, mid, welcome(con, uid), professions_kb(uid))
     elif data == "emp":
         event(con, uid, "employer")
+        rows = [[("📋 Анкеты кандидатов", "ae:start")]] if AN.emp_allowed(uid) else []
         send(chat_id, T.EMPLOYER.format(contact=T.CONTACT, oferta=T.OFERTA_URL),
-             kb([[("✍️ Написать", f"https://t.me/{T.CONTACT.lstrip('@')}")]]))
+             kb(rows + [[("✍️ Написать", f"https://t.me/{T.CONTACT.lstrip('@')}")]]))
     elif data.startswith("p:") and data[2:] in T.PROFESSIONS:
         set_user(con, uid, profession=data[2:])
         event(con, uid, "profession", data[2:])
@@ -549,6 +552,10 @@ def on_admin(con, msg, text):
         AN.admin_pin(con, chat)
     elif cmd == "/anketas":
         AN.admin_list(con, chat)
+    elif cmd == "/empsubs":
+        AN.admin_empsubs(con, chat)
+    elif cmd == "/kandidaty":
+        AN.emp_start(con, msg["from"]["id"], chat)
     elif cmd == "/testrass":
         on_testrass(con, msg)
     elif cmd == "/rass":
@@ -620,7 +627,7 @@ def on_admin(con, msg, text):
         send(chat, "\n".join(lines))
     else:
         send(chat, "Команды: /podbor · /testrass · /rass · /reparse · /vac N · /mesto N Город · "
-                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin")
+                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs")
 
 
 def pb_get(con, uid):
@@ -1105,7 +1112,7 @@ def main():
     global BOT_USERNAME
     BOT_USERNAME = me.get("username") or BOT_USERNAME
     AN.init(sys.modules[__name__])
-    log.info("started as @%s, анкеты: %s", me.get("username"), AN.MODE or "выкл")
+    log.info("started as @%s, анкеты: %s, работодатели: %s", me.get("username"), AN.MODE or "выкл", AN.EMP_MODE or "выкл")
     row = con.execute("SELECT value FROM state WHERE key='offset'").fetchone()
     offset = int(row["value"]) if row else None
     allowed = ["message", "callback_query", "channel_post", "edited_channel_post"]
@@ -1120,6 +1127,10 @@ def main():
             subs_tick(con)
         except Exception:
             log.exception("subs_tick failed")
+        try:
+            AN.emp_tick(con)
+        except Exception:
+            log.exception("emp_tick failed")
         for upd in updates:
             offset = upd["update_id"] + 1
             try:

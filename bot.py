@@ -12,8 +12,10 @@ import os
 import re
 import socket
 import sqlite3
+import sys
 import time
 
+import anketa as AN
 import podbor as PB
 import texts as T
 
@@ -24,6 +26,7 @@ CHANNEL = os.environ.get("CHANNEL", "@delaidelojob")
 CHANNEL_INVITE = os.environ.get("CHANNEL_INVITE", T.CHANNEL_URL_FALLBACK)
 ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split(",") if x}
 DB_PATH = os.environ.get("DB_PATH", "ddbot.sqlite3")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "delaidelo24bot")  # уточняется через getMe при старте
 
 HASHTAG_RE = re.compile(r"#[0-9A-Za-zА-Яа-яЁё_]+")
 CLOSED_RE = re.compile(r"закрыт", re.IGNORECASE)
@@ -166,6 +169,7 @@ def db_connect(path=None):
     CREATE TABLE IF NOT EXISTS sub_queue(user_id INTEGER, message_id INTEGER, ts INTEGER,
       PRIMARY KEY(user_id, message_id));
     """)
+    con.executescript(AN.SCHEMA)
     con.commit()
     return con
 
@@ -308,9 +312,11 @@ def professions_kb(uid=None):
 
 def final_kb(uid=None):
     top = [[PODBOR_BTN]] if uid is not None and podbor_allowed(uid) else []
+    anketa_btn = ("📝 Оставить анкету", "an:start") if uid is not None and AN.allowed(uid) \
+        else ("📝 Оставить анкету", T.ANKETA_URL)
     return kb(top + [
         [("📢 Все вакансии в канале", CHANNEL_INVITE)],
-        [("📝 Оставить анкету", T.ANKETA_URL)],
+        [anketa_btn],
         [("🛵 Подработка курьером", T.COURIER_URL)],
         [("🔁 Другая профессия", "restart"), ("🏪 Я работодатель", "emp")],
     ])
@@ -352,7 +358,17 @@ def on_start(con, msg):
     source = payload if SOURCE_RE.match(payload) else None
     touch_user(con, uid, source)
     event(con, uid, "start", source or "")
-    send(msg["chat"]["id"], welcome(con, msg["from"]["id"]), professions_kb(msg["from"]["id"]))
+    chat = msg["chat"]["id"]
+    if AN.enabled():
+        if payload == "anketa":
+            AN.start(con, uid, chat)
+            return
+        if payload.startswith("c_") and payload[2:].isdigit():
+            AN.req_start(con, uid, chat, int(payload[2:]))
+            return
+        AN.st_set(con, f"an:{uid}", None)   # /start посреди анкеты — начинаем с чистого листа
+        AN.st_set(con, f"ac:{uid}", None)
+    send(chat, welcome(con, uid), professions_kb(uid))
 
 
 def on_stats(con, msg):
@@ -392,7 +408,13 @@ def on_callback(con, cq):
         _answer(cq["id"])
         answered = True
 
-    if data.startswith("sb:") and podbor_allowed(uid):
+    if data == "an:start":
+        AN.start(con, uid, chat_id)
+    elif data.startswith("an:req:"):
+        AN.req_callback(con, uid, chat_id, mid, data)
+    elif data.startswith("an:") and AN.allowed(uid):
+        AN.callback(con, cq, uid, chat_id, mid, data)
+    elif data.startswith("sb:") and podbor_allowed(uid):
         sub_callback(con, uid, chat_id, mid, data)
     elif data == "pb:start" and podbor_allowed(uid):
         st = pb_get(con, uid)
@@ -523,6 +545,10 @@ def on_admin(con, msg, text):
         else:
             pb_set(con, uid, {})
             send(chat, "🔎 <b>Подборка вакансий</b> (тест)\n\nКем хочешь работать?", pb_prof_kb())
+    elif cmd == "/anketa_pin":
+        AN.admin_pin(con, chat)
+    elif cmd == "/anketas":
+        AN.admin_list(con, chat)
     elif cmd == "/testrass":
         on_testrass(con, msg)
     elif cmd == "/rass":
@@ -594,7 +620,7 @@ def on_admin(con, msg, text):
         send(chat, "\n".join(lines))
     else:
         send(chat, "Команды: /podbor · /testrass · /rass · /reparse · /vac N · /mesto N Город · "
-                   "/stavka N 4000-6000 смена")
+                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin")
 
 
 def pb_get(con, uid):
@@ -1052,8 +1078,13 @@ def handle(con, upd):
     if not msg or msg.get("chat", {}).get("type") != "private":
         return
     text = msg.get("text") or ""
+    uid = msg["from"]["id"]
     if text.startswith("/start"):
         on_start(con, msg)
+    elif text.split()[:1] == ["/anketa"] and AN.enabled():
+        AN.start(con, uid, msg["chat"]["id"])
+    elif AN.enabled() and AN.waiting(con, uid) and not text.startswith("/") and AN.on_message(con, msg):
+        pass
     elif text.startswith("/stats"):
         on_stats(con, msg)
     elif msg["from"]["id"] in ADMIN_IDS and text.startswith("/"):
@@ -1071,7 +1102,10 @@ def main():
         raise SystemExit("BOT_TOKEN не задан — проверь файл окружения")
     con = db_connect()
     me = tg("getMe")
-    log.info("started as @%s", me.get("username"))
+    global BOT_USERNAME
+    BOT_USERNAME = me.get("username") or BOT_USERNAME
+    AN.init(sys.modules[__name__])
+    log.info("started as @%s, анкеты: %s", me.get("username"), AN.MODE or "выкл")
     row = con.execute("SELECT value FROM state WHERE key='offset'").fetchone()
     offset = int(row["value"]) if row else None
     allowed = ["message", "callback_query", "channel_post", "edited_channel_post"]

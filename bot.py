@@ -306,6 +306,8 @@ def professions_kb(uid=None):
     # подборка — под профессиями: кто пришёл с рекламы «узнай зарплату», сначала видит профессии
     if uid is not None and podbor_allowed(uid):
         rows.append([PODBOR_BTN])
+    if uid is not None and AN.allowed(uid):
+        rows.append([("📝 Моя анкета", "an:start")])
     rows.append([("🏪 Я работодатель", "emp")])
     return kb(rows)
 
@@ -1115,6 +1117,13 @@ def main():
     global BOT_USERNAME
     BOT_USERNAME = me.get("username") or BOT_USERNAME
     AN.init(sys.modules[__name__])
+    try:   # меню команд у кнопки «/» в Telegram
+        cmds = [{"command": "start", "description": "Главное меню"}]
+        if AN.enabled():
+            cmds.append({"command": "anketa", "description": "Моя анкета: заполнить, изменить, удалить"})
+        tg("setMyCommands", commands=cmds)
+    except TgError as e:
+        log.warning("setMyCommands: %s", e)
     log.info("started as @%s, анкеты: %s, работодатели: %s", me.get("username"), AN.MODE or "выкл", AN.EMP_MODE or "выкл")
     row = con.execute("SELECT value FROM state WHERE key='offset'").fetchone()
     offset = int(row["value"]) if row else None

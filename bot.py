@@ -366,6 +366,9 @@ def on_start(con, msg):
         if payload.startswith("c_") and payload[2:].isdigit():
             AN.req_start(con, uid, chat, int(payload[2:]))
             return
+        if payload == "kandidaty" and AN.emp_allowed(uid):
+            AN.emp_start(con, uid, chat)
+            return
         AN.st_set(con, f"an:{uid}", None)   # /start посреди анкеты — начинаем с чистого листа
         AN.st_set(con, f"ac:{uid}", None)
     send(chat, welcome(con, uid), professions_kb(uid))

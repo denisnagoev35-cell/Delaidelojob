@@ -148,10 +148,11 @@ def public_text(d, test=False):
 
 
 def contact_str(d):
+    # телефон есть только если соискатель сам выбрал «Оставить номер» — тогда отдаём его, а не ник
+    if d.get("phone"):
+        return html.escape(d["phone"])
     if d.get("username"):
         return f"@{d['username']}"
-    if d.get("phone"):
-        return d["phone"]
     return f"<a href=\"tg://user?id={d.get('uid')}\">написать в Telegram</a>"
 
 

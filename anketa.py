@@ -111,7 +111,12 @@ ASK_PHOTO = ("📸 Можешь прислать одно фото <b>своих
 ASK_CONTACT = "📞 Как заведению с тобой связаться?"
 
 
-def prof_name(k):
+OTHER_EMOJI = "✨"
+
+
+def prof_name(k, d=None):
+    if k == "other":
+        return f"{OTHER_EMOJI} {(d or {}).get('prof_text') or 'Другое'}"
     p = B.T.PROFESSIONS.get(k, {})
     return f"{p.get('emoji', '')} {p.get('name', k)}".strip()
 
@@ -126,16 +131,17 @@ def public_text(d, test=False):
     lines = []
     if test:
         lines += ["🧪 <i>Тест: так анкета будет выглядеть в чате @delaijobchat</i>", ""]
-    lines.append(f"📝 <b>Анкета · {html.escape(prof_name(d.get('prof')))}</b>")
+    lines.append(f"📝 <b>Анкета · {html.escape(prof_name(d.get('prof'), d))}</b>")
     lines.append("")
     lines.append(f"🧑‍🍳 Опыт: {html.escape(B.T.EXPERIENCE.get(d.get('exp'), '—'))}")
     lines.append(f"📍 {html.escape(place_name(d))}")
     sal = d.get("salary") or 0
     lines.append(f"💰 {'от ' + B.PB.money(sal) + ' ₽ за смену' if sal else 'ставка — договоримся'}")
-    lines.append(f"🕒 {html.escape(SCHED_NAMES.get(d.get('sched'), 'Любой график'))}")
+    sched = d.get("sched")
+    lines.append(f"🕒 {html.escape('Любой график' if sched in (None, 'any') else SCHED_NAMES.get(sched, 'Любой график'))}")
     if d.get("about"):
         lines += ["", f"💬 {html.escape(d['about'])}"]
-    tag = p.get("tag", "")
+    tag = p.get("tag", "") if d.get("prof") != "other" else "#другое"
     lines += ["", f"#анкета {tag}".strip()]
     return "\n".join(lines)
 
@@ -154,6 +160,7 @@ def kb_prof():
     rows = []
     for i in range(0, len(PROF_KEYS), 2):
         rows.append([(prof_name(k), f"an:p:{k}") for k in PROF_KEYS[i:i + 2]])
+    rows.append([(f"{OTHER_EMOJI} Другое", "an:p:other")])
     rows.append([("Отмена", "an:cancel")])
     return B.kb(rows)
 
@@ -250,7 +257,12 @@ def callback(con, cq, uid, chat_id, mid, data):
         return
     if step == "p" and val in PROF_KEYS:
         d["prof"] = val
+        d.pop("prof_text", None)
         B.edit(chat_id, mid, ASK_EXP, kb_exp())
+    elif step == "p" and val == "other":
+        d["prof"] = "other"
+        d["wait"] = "prof"
+        B.edit(chat_id, mid, "✍️ Напиши, кем хочешь работать, например: <b>сушист</b>, <b>кассир</b>, <b>мойщик посуды</b>")
     elif step == "e" and val in B.T.EXPERIENCE:
         d["exp"] = val
         B.edit(chat_id, mid, ASK_PLACE, kb_place())
@@ -310,6 +322,13 @@ def on_message(con, msg):
         d["name"] = text.title()
         d.pop("wait", None)
         B.send(chat, ASK_PROF, kb_prof())
+    elif w == "prof":
+        if not (2 <= len(text) <= 30) or LINK_RE.search(text) or not re.search(r"[A-Za-zА-Яа-яЁё]", text):
+            B.send(chat, "Напиши профессию коротко, до 30 знаков, например: <b>сушист</b>")
+            return True
+        d["prof_text"] = text[:1].upper() + text[1:]
+        d.pop("wait", None)
+        B.send(chat, ASK_EXP, kb_exp())
     elif w == "city":
         city = B.PB.canon_city(text)
         if not city:
@@ -410,7 +429,7 @@ def publish(con, uid, chat_id, d):
     if not test_mode():
         for a in B.ADMIN_IDS:
             try:
-                B.send(a, f"📝 Новая анкета №{aid}: {html.escape(prof_name(d.get('prof')))}, "
+                B.send(a, f"📝 Новая анкета №{aid}: {html.escape(prof_name(d.get('prof'), d))}, "
                           f"{html.escape(place_name(d))} · {html.escape(d.get('name', ''))} {contact_str(d)}")
             except B.TgError:
                 pass
@@ -448,7 +467,7 @@ def req_start(con, uid, chat_id, aid):
         return
     st_set(con, f"ac:{uid}", {"wait": "venue", "aid": aid})
     d = json.loads(row["data"])
-    B.send(chat_id, f"📩 <b>Контакт кандидата</b>\n<i>{html.escape(prof_name(d.get('prof')))} · "
+    B.send(chat_id, f"📩 <b>Контакт кандидата</b>\n<i>{html.escape(prof_name(d.get('prof'), d))} · "
                     f"{html.escape(place_name(d))}</i>\n\n"
                     "Напиши название заведения — кандидат увидит, кто им интересуется, и будет ждать сообщения.",
            B.kb([[("Отмена", "an:req:cancel")]]))
@@ -472,7 +491,7 @@ def req_message(con, msg):
     con.commit()
     B.event(con, uid, "anketa_contact", f"{row['id']}:{venue}")
     B.send(chat, f"✅ <b>Контакт кандидата</b>\n\n"
-                 f"👤 {html.escape(d.get('name', ''))} — {html.escape(prof_name(d.get('prof')))}, "
+                 f"👤 {html.escape(d.get('name', ''))} — {html.escape(prof_name(d.get('prof'), d))}, "
                  f"{html.escape(place_name(d))}\n📞 {contact_str(d)}\n\n"
                  f"Напиши кандидату и представься: «{html.escape(venue)}, по анкете в чате Делай Дело». "
                  f"Мы уже предупредили, что ты напишешь.")
@@ -527,6 +546,6 @@ def admin_list(con, chat_id):
     lines = [f"📝 Активных анкет: {len(rows)} (показаны последние 20) · запросов контакта всего: {reqs}"]
     for r in rows:
         d = json.loads(r["data"])
-        lines.append(f"№{r['id']} · {html.escape(prof_name(d.get('prof')))} · {html.escape(place_name(d))} · "
+        lines.append(f"№{r['id']} · {html.escape(prof_name(d.get('prof'), d))} · {html.escape(place_name(d))} · "
                      f"{html.escape(d.get('name', ''))} {contact_str(d)}")
     B.send(chat_id, "\n".join(lines))

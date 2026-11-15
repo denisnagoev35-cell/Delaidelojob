@@ -386,11 +386,13 @@ def contact_button(aid):
 
 
 def post(target, d, aid, test):
+    """Анкета в чат — без звука, чтобы не будить участников."""
     text = public_text(d, test=test)
     if d.get("photo"):
         return B.tg("sendPhoto", chat_id=target, photo=d["photo"], caption=text, parse_mode="HTML",
-                    reply_markup=contact_button(aid))
-    return B.send(target, text, contact_button(aid))
+                    reply_markup=contact_button(aid), disable_notification=True)
+    return B.tg("sendMessage", chat_id=target, text=text, parse_mode="HTML", disable_web_page_preview=True,
+                reply_markup=contact_button(aid), disable_notification=True)
 
 
 def unpublish(con, row):
@@ -550,7 +552,8 @@ def admin_pin(con, chat_id):
         B.send(chat_id, "🧪 Тест: этот пост бот опубликует в чате после запуска (ANKETA_MODE=on):")
         B.send(chat_id, text, markup)
     else:
-        m = B.send(CHAT, text, markup)
+        m = B.tg("sendMessage", chat_id=CHAT, text=text, parse_mode="HTML", disable_web_page_preview=True,
+                 reply_markup=markup, disable_notification=True)
         try:
             B.tg("pinChatMessage", chat_id=CHAT, message_id=m["message_id"], disable_notification=True)
             B.send(chat_id, "✅ Опубликовал и закрепил в чате.")

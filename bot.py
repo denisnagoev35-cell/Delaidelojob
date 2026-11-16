@@ -16,6 +16,7 @@ import sys
 import time
 
 import anketa as AN
+import digest as DG
 import podbor as PB
 import texts as T
 
@@ -561,6 +562,8 @@ def on_admin(con, msg, text):
         AN.admin_empsubs(con, chat)
     elif cmd == "/kandidaty":
         AN.emp_start(con, msg["from"]["id"], chat)
+    elif cmd == "/digest":
+        DG.run(con, manual_chat=chat)
     elif cmd == "/testrass":
         on_testrass(con, msg)
     elif cmd == "/rass":
@@ -632,7 +635,7 @@ def on_admin(con, msg, text):
         send(chat, "\n".join(lines))
     else:
         send(chat, "Команды: /podbor · /testrass · /rass · /reparse · /vac N · /mesto N Город · "
-                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs")
+                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest")
 
 
 def pb_get(con, uid):
@@ -1117,6 +1120,7 @@ def main():
     global BOT_USERNAME
     BOT_USERNAME = me.get("username") or BOT_USERNAME
     AN.init(sys.modules[__name__])
+    DG.init(sys.modules[__name__])
     try:   # меню команд у кнопки «/» в Telegram
         cmds = [{"command": "start", "description": "Главное меню"}]
         if AN.enabled():
@@ -1124,7 +1128,8 @@ def main():
         tg("setMyCommands", commands=cmds)
     except TgError as e:
         log.warning("setMyCommands: %s", e)
-    log.info("started as @%s, анкеты: %s, работодатели: %s", me.get("username"), AN.MODE or "выкл", AN.EMP_MODE or "выкл")
+    log.info("started as @%s, анкеты: %s, работодатели: %s, дайджест: %s", me.get("username"), AN.MODE or "выкл",
+             AN.EMP_MODE or "выкл", DG.MODE)
     row = con.execute("SELECT value FROM state WHERE key='offset'").fetchone()
     offset = int(row["value"]) if row else None
     allowed = ["message", "callback_query", "channel_post", "edited_channel_post"]
@@ -1143,6 +1148,10 @@ def main():
             AN.emp_tick(con)
         except Exception:
             log.exception("emp_tick failed")
+        try:
+            DG.tick(con)
+        except Exception:
+            log.exception("digest tick failed")
         for upd in updates:
             offset = upd["update_id"] + 1
             try:

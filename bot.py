@@ -564,6 +564,8 @@ def on_admin(con, msg, text):
         AN.emp_start(con, msg["from"]["id"], chat)
     elif cmd == "/digest":
         DG.run(con, manual_chat=chat)
+    elif cmd == "/digest_pin":
+        DG.set_pin(con, chat, args[0] if args else "")
     elif cmd == "/testrass":
         on_testrass(con, msg)
     elif cmd == "/rass":
@@ -635,7 +637,7 @@ def on_admin(con, msg, text):
         send(chat, "\n".join(lines))
     else:
         send(chat, "Команды: /podbor · /testrass · /rass · /reparse · /vac N · /mesto N Город · "
-                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest")
+                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest · /digest_pin N")
 
 
 def pb_get(con, uid):

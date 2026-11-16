@@ -6,9 +6,11 @@
 
 Режим в /etc/ddbot.env:
   DIGEST_MODE=test (или пусто) — дайджест приходит только ADMIN_IDS в личку;
-  DIGEST_MODE=on               — публикуется в канал CHANNEL (бот должен иметь право публиковать);
+  DIGEST_MODE=on               — публикуется в канал CHANNEL и закрепляется без уведомления, прошлый дайджест
+                                 открепляется (боту нужны права «Публикация» и «Закрепление сообщений»);
   DIGEST_MODE=off              — выключено.
-Команда админа /digest — прислать дайджест себе прямо сейчас (в канал не уходит никогда).
+Команды админа: /digest — прислать дайджест себе прямо сейчас (в канал не уходит никогда);
+/digest_pin N — записать вручную опубликованный дайджест (пост №N), чтобы бот открепил его при следующем.
 """
 import html
 import json
@@ -164,12 +166,13 @@ def send(con, chat_id, text):
     """Пост дайджеста: обложка с подписью; если текст длиннее лимита подписи — обложка и текст отдельно."""
     fid, stamp = cover_id(con)
     if stamp is None:                       # обложки нет — просто текст
-        B.send(chat_id, text)
-        return
+        return B.send(chat_id, text)
     caption = text if plain_len(text) <= CAPTION_MAX else None
+    m = None
     if fid:
         try:
-            B.tg("sendPhoto", chat_id=chat_id, photo=fid, caption=caption, parse_mode="HTML" if caption else None)
+            m = B.tg("sendPhoto", chat_id=chat_id, photo=fid, caption=caption,
+                     parse_mode="HTML" if caption else None)
         except B.TgError:
             fid = None
     if not fid:
@@ -180,7 +183,46 @@ def send(con, chat_id, text):
                     (json.dumps({"stamp": stamp, "file_id": new}),))
         con.commit()
     if not caption:
-        B.send(chat_id, text)
+        m = B.send(chat_id, text)
+    return m            # сообщение с текстом дайджеста — его и закрепляем
+
+
+def state_get(con, key):
+    r = con.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
+    return r["value"] if r else None
+
+
+def state_set(con, key, value):
+    con.execute("INSERT INTO state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, str(value)))
+    con.commit()
+
+
+def repin(con, message_id):
+    """Закрепить новый дайджест без уведомления и открепить прошлый. Возвращает текст ошибки или None."""
+    old = state_get(con, "digest_pin")
+    try:
+        B.tg("pinChatMessage", chat_id=B.CHANNEL, message_id=message_id, disable_notification=True)
+    except B.TgError as e:
+        return str(e)
+    state_set(con, "digest_pin", message_id)
+    if old and old.isdigit() and int(old) != message_id:
+        try:
+            B.tg("unpinChatMessage", chat_id=B.CHANNEL, message_id=int(old))
+        except B.TgError as e:
+            B.log.warning("digest unpin %s: %s", old, e)   # пост могли удалить или открепить руками
+    return None
+
+
+def set_pin(con, chat_id, arg):
+    """/digest_pin N — запомнить вручную опубликованный дайджест, чтобы бот открепил его при выходе следующего."""
+    if not arg.isdigit():
+        cur = state_get(con, "digest_pin")
+        B.send(chat_id, f"Сейчас как закреплённый дайджест записан пост: {cur or 'нет'}.\n"
+                        "Записать другой: <code>/digest_pin 205</code> (номер поста в канале).")
+        return
+    state_set(con, "digest_pin", int(arg))
+    B.send(chat_id, f"Запомнил: пост №{arg} — текущий дайджест. Откреплю его, когда выйдет следующий.")
 
 
 def to_admins(con, text, n, note):
@@ -212,8 +254,16 @@ def run(con, manual_chat=None):
         return
     if MODE == "on":
         try:
-            send(con, B.CHANNEL, text)
+            m = send(con, B.CHANNEL, text)
             B.event(con, 0, "digest_pub", str(n))
+            err = repin(con, m["message_id"])
+            if err:
+                for a in B.ADMIN_IDS:
+                    try:
+                        B.send(a, f"📌 Дайджест опубликован, но закрепить не смог: {html.escape(err)}. "
+                                  "Дай боту в канале право «Закрепление сообщений» или закрепи вручную.")
+                    except B.TgError:
+                        pass
             return
         except B.TgError as e:
             B.log.warning("digest publish: %s", e)

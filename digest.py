@@ -99,7 +99,7 @@ def build(con):
         return None, 0
     head = "ТОП-10 вакансий недели" if len(rows) == TOP else "Вакансии недели"
     lines = [f"🔥 <b>{head} в HoReCa Москвы и МО</b>", ""]
-    lines += [line(r) for r in rows]
+    lines.append("\n\n".join(line(r) for r in rows))   # пустая строка между вакансиями
     lines += ["", f"👉 Отклик и новые вакансии каждый день — {html.escape(B.CHANNEL)}"]
     return "\n".join(lines), len(rows)
 

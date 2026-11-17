@@ -30,7 +30,12 @@ DB_PATH = os.environ.get("DB_PATH", "ddbot.sqlite3")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "delaidelo24bot")  # уточняется через getMe при старте
 
 HASHTAG_RE = re.compile(r"#[0-9A-Za-zА-Яа-яЁё_]+")
-CLOSED_RE = re.compile(r"закрыт", re.IGNORECASE)
+# «Вакансия закрыта», «ЗАКРЫТО», «неактуально». Не «после закрытия» и не просто ❌ — его ставят для красоты
+CLOSED_RE = re.compile(r"\bзакрыт[аоы]?\b|неактуальн|набор (?:закрыт|заверш)", re.IGNORECASE)
+
+
+def is_closed(text):
+    return 1 if CLOSED_RE.search((text or "")[:200]) else 0
 SOURCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -207,7 +212,7 @@ def get_user(con, uid):
 def save_post(con, post):
     text = post.get("text") or post.get("caption") or ""
     tags = " ".join(sorted({t.lower() for t in HASHTAG_RE.findall(text)}))
-    closed = 1 if CLOSED_RE.search(text[:200]) or "❌" in text[:50] else 0
+    closed = is_closed(text)
     con.execute("INSERT INTO posts(message_id, date, text, tags, closed) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(message_id) DO UPDATE SET text=excluded.text, tags=excluded.tags, "
                 "closed=excluded.closed",
@@ -599,6 +604,10 @@ def on_admin(con, msg, text):
         ids = [r["message_id"] for r in con.execute(
             "SELECT message_id FROM posts WHERE date>=? ORDER BY date", (since,)).fetchall()]
         send(chat, f"Разбираю {len(ids)} постов за {days} дн… (ручные правки сохраняю)")
+        for n in ids:   # «закрыто» пересчитываем по текущему правилу
+            row = con.execute("SELECT text FROM posts WHERE message_id=?", (n,)).fetchone()
+            con.execute("UPDATE posts SET closed=? WHERE message_id=?", (is_closed(row["text"]), n))
+        con.commit()
         ok = gpt = media = 0
         no_city, no_sal, not_vac, digests = [], [], [], []
         for n in ids:

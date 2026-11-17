@@ -225,8 +225,10 @@ def parse_salary(text):
             continue
         k1, k2, cur, tail = m.group("k1"), m.group("k2"), m.group("cur"), m.group("tail") or ""
         thousands = bool(k1 or k2)
-        if not (cur or thousands or re.search(r"смен|час|мес|выход|₽|руб", _norm(tail))):
-            continue  # просто число (дата, адрес, возраст)
+        before = _norm(text[max(0, m.start() - 20):m.start()])
+        if not (cur or thousands or re.search(r"смен|час|мес|выход|₽|руб", _norm(tail))
+                or re.search(r"оплат\w*|ставк\w*|выход|оклад|\bзп\b|зарплат\w*|фикс\w*", before)):
+            continue  # просто число (дата, адрес, возраст); «Оплата: 2000 + 10%» — ставка
         lo, hi = a, b
         upto = (m.group("from") or "").lower().startswith("до") and b is None
         if thousands:
@@ -577,6 +579,9 @@ def parse_post(text, tags, prof_keys, use_gpt=True):
         out["profs"] = []                 # нет хэштега, нейросеть вакансии не видит
     if rules["kind"] == "digest" and out.get("kind") != "other":
         out["kind"] = "digest"
+    if out.get("kind") == "other" and tag_profs and rules.get("sal_min") or \
+            out.get("kind") == "other" and tag_profs and rules.get("sal_max"):
+        out["kind"] = "vacancy"           # хэштег профессии + ставка в тексте — это вакансия, нейросеть ошиблась
     if out.get("kind") in ("digest", "other"):
         out["profs"] = []                 # подборки и промо в поиск не берём
     out["prof"] = out["profs"][0] if out.get("profs") else None

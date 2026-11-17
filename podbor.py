@@ -82,6 +82,8 @@ STREET_BEFORE = re.compile(r"(?:ул\.?|улиц\w*|бульвар\w*|б-р|пр
                            r"площад\w*|пл\.|проезд\w*|набережн\w*|наб\.|тупик\w*)\s*$", re.I)
 STREET_AFTER = re.compile(r"^\s*(?:улиц\w*|ул\.|бульвар\w*|шоссе|проспект\w*|переул\w*|проезд\w*|курсант\w*|"
                           r"набережн\w*|площад\w*|тупик\w*)", re.I)
+# «м. Каширская», «метро Подольская» — это станция метро, а не город Кашира или Подольск
+METRO_BEFORE = re.compile(r"(?:\bм\.?|\bметро|\bмцк|\bмцд|\bст\.|\bстанци\w*)\s*[«\"]?\s*$", re.I)
 
 
 def find_cities(text):
@@ -94,7 +96,9 @@ def find_cities(text):
     hits = []
     for name, rx in CITY_RES:
         for m in rx.finditer(t):
-            if STREET_BEFORE.search(t[max(0, m.start() - 15):m.start()]) or STREET_AFTER.match(t[m.end():m.end() + 15]):
+            before = t[max(0, m.start() - 15):m.start()]
+            if STREET_BEFORE.search(before) or METRO_BEFORE.search(before) or \
+                    STREET_AFTER.match(t[m.end():m.end() + 15]):
                 continue
             hits.append((m.start(), name))
             break

@@ -635,7 +635,7 @@ def salary_str(r):
         s = money(lo or hi) if lo == hi else (f"от {money(lo)}" if lo else f"до {money(hi)}")
     s = f"{s} {UNIT_TXT.get(u, '₽')}"
     if "bonus" in r.keys() and r["bonus"]:
-        s += " + % и чай"
+        s += " + % или чаевые"   # бот знает только «есть доплата», не какая именно
     return s
 
 

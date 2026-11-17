@@ -53,6 +53,7 @@ h1 em{color:var(--y);font-style:italic;display:block}
 .btn-main{background:var(--y);color:#111;box-shadow:0 10px 30px rgba(255,198,3,.25)}
 .btn-main:hover{background:var(--y2)}
 .btn-sec{margin-top:10px;background:transparent;color:var(--y);border:2px solid var(--y);min-height:52px;font-size:15.5px}
+.btn-sec.muted{color:var(--tx);border:1.5px solid #444;font-weight:700;font-size:15px;min-height:50px}
 .hint{font-size:13px;color:#fff;font-weight:700;text-align:center;margin:8px 2px 0}
 .note{font-size:13px;color:var(--mut);line-height:1.45;margin:10px 2px 0;text-align:center}
 footer{margin-top:28px;color:#6F6F6F;font-size:12px;line-height:1.6;text-align:center}
@@ -183,7 +184,8 @@ render();
 </script>
 <script>
 // Директ: люди с utm_source=yandex идут в бота с меткой ya_direct, остальные — как раньше (vk_ads_bot).
-(function(){try{var s=new URLSearchParams(location.search).get('utm_source');if(s==='yandex'){document.getElementById('bot-btn').href='https://t.me/delaidelo24bot?start=ya_direct';document.getElementById('ch-btn').href='https://t.me/+rLkyxOu5GEo4YWFi';}}catch(e){}})();
+// Для Директа кнопка канала серая, главная — бот: через бота подписываются примерно вдвое чаще (17.11: 6 из 9 против 5 из 39).
+(function(){try{var s=new URLSearchParams(location.search).get('utm_source');if(s==='yandex'){document.getElementById('bot-btn').href='https://t.me/delaidelo24bot?start=ya_direct';var ch=document.getElementById('ch-btn');ch.href='https://t.me/+rLkyxOu5GEo4YWFi';ch.className='btn btn-sec muted';}}catch(e){}})();
 </script>
 </body>
 </html>

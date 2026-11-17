@@ -227,7 +227,8 @@ def parse_salary(text):
         thousands = bool(k1 or k2)
         before = _norm(text[max(0, m.start() - 20):m.start()])
         if not (cur or thousands or re.search(r"смен|час|мес|выход|₽|руб", _norm(tail))
-                or re.search(r"оплат\w*|ставк\w*|выход|оклад|\bзп\b|зарплат\w*|фикс\w*", before)):
+                or re.search(r"(?:оплат\w*|ставк\w*|выход|оклад|\bзп\b|зарплат\w*|фикс\w*)\s*[:\-–—=]?\s*$", before)
+                and not re.match(r"\s*(?:г\.|год)", tail)):
             continue  # просто число (дата, адрес, возраст); «Оплата: 2000 + 10%» — ставка
         lo, hi = a, b
         upto = (m.group("from") or "").lower().startswith("до") and b is None

@@ -211,6 +211,9 @@ def get_user(con, uid):
 
 def save_post(con, post):
     text = post.get("text") or post.get("caption") or ""
+    if not text.strip():   # диагностика: что прислал Telegram вместо текста
+        log.warning("post %s без текста, поля: %s", post.get("message_id"),
+                    ", ".join(sorted(k for k in post if k not in ("chat", "sender_chat", "date", "message_id"))))
     tags = " ".join(sorted({t.lower() for t in HASHTAG_RE.findall(text)}))
     closed = is_closed(text)
     con.execute("INSERT INTO posts(message_id, date, text, tags, closed) VALUES(?,?,?,?,?) "

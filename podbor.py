@@ -358,7 +358,7 @@ def bonus_str(r):
 def parse_kind(text, tags, prof_keys):
     """vacancy | digest (подборка нескольких вакансий) | other (промо, анонс)."""
     t = _norm(text)
-    if re.search(r"вакансии недели|подборка вакансий|дайджест", t):
+    if re.search(r"ваканси[йия] недели|топ[- ]?\d+ ваканс|подборк\w* ваканс|дайджест", t):
         return "digest"
     if len(find_profs("", tags, prof_keys, use_words=False)) >= 4:
         return "digest"

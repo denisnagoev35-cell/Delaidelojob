@@ -247,6 +247,23 @@ def channel_username():
     return CHANNEL[1:] if CHANNEL.startswith("@") else None
 
 
+def warn_no_text(post):
+    """Фото без подписи — чаще всего подпись длиннее 1024 знаков (Premium): бот её не получает.
+    Альбомы и видео (ролики) не трогаем — у них подпись часто и правда пустая."""
+    if (post.get("text") or post.get("caption") or "").strip():
+        return
+    if "photo" not in post or post.get("media_group_id"):
+        return
+    n = post["message_id"]
+    for a in ADMIN_IDS:
+        try:
+            send(a, f"⚠️ <a href=\"{post_link(n)}\">Пост №{n}</a> пришёл как фото без текста — бот его не разберёт.\n"
+                    "Если это вакансия, скорее всего подпись длиннее 1024 знаков (так можно с Premium). "
+                    "Перевыложите: подпись короче или текст отдельным постом.")
+        except TgError as e:
+            log.warning("warn_no_text %s: %s", n, e)
+
+
 def post_link(message_id):
     u = channel_username()
     return f"https://t.me/{u}/{message_id}" if u else CHANNEL_INVITE
@@ -1093,6 +1110,8 @@ def handle(con, upd):
         uname = (post.get("chat", {}).get("username") or "").lower()
         if channel_username() and uname == channel_username().lower():
             save_post(con, post)
+            if "channel_post" in upd:
+                warn_no_text(post)
             try:
                 fields = analyze_post(con, post["message_id"], notify=True)
                 if fields and "channel_post" in upd:  # только новые посты, не правки

@@ -18,7 +18,6 @@ import time
 import anketa as AN
 import digest as DG
 import podbor as PB
-import posting as PS
 import texts as T
 
 log = logging.getLogger("ddbot")
@@ -178,7 +177,6 @@ def db_connect(path=None):
     """)
     con.executescript(AN.SCHEMA)
     con.commit()
-    PS.db_init(con)
     return con
 
 
@@ -460,8 +458,6 @@ def on_callback(con, cq):
             pb_set(con, uid, {})
             send(chat_id, "🔎 <b>Подборка вакансий</b>\n\nОтветь на 5 коротких вопросов — покажу все вакансии "
                           "из канала за неделю, которые тебе подходят.\n\nКем хочешь работать?", pb_prof_kb())
-    elif data.startswith("ps:") and PS.allowed(uid):
-        PS.callback(con, cq, uid, chat_id, mid, data)
     elif data.startswith("pb:") and podbor_allowed(uid):
         pb_callback(con, uid, chat_id, mid, data)
     elif data.startswith("pm:") and uid in ADMIN_IDS:
@@ -670,8 +666,7 @@ def on_admin(con, msg, text):
         send(chat, "\n".join(lines))
     else:
         send(chat, "Команды: /podbor · /testrass · /rass · /reparse · /vac N · /mesto N Город · "
-                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest · /digest_pin N\n"
-                   "Посты: /post · /pachka · /ochered")
+                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest · /digest_pin N")
 
 
 def pb_get(con, uid):
@@ -1140,14 +1135,10 @@ def handle(con, upd):
         pass
     elif text.startswith("/stats"):
         on_stats(con, msg)
-    elif PS.allowed(uid) and text.split()[:1] and text.split()[0].split("@")[0].lower() in PS.COMMANDS:
-        PS.on_command(con, msg, text)
     elif msg["from"]["id"] in ADMIN_IDS and text.startswith("/"):
         on_admin(con, msg, text)
     elif podbor_allowed(msg["from"]["id"]) and pb_get(con, msg["from"]["id"]).get("wait") == "city":
         pb_city_text(con, msg, text)
-    elif PS.allowed(uid) and not text.startswith("/") and PS.on_message(con, msg):
-        pass
     else:
         touch_user(con, msg["from"]["id"])
         send(msg["chat"]["id"], welcome(con, msg["from"]["id"]), professions_kb(msg["from"]["id"]))
@@ -1163,7 +1154,6 @@ def main():
     BOT_USERNAME = me.get("username") or BOT_USERNAME
     AN.init(sys.modules[__name__])
     DG.init(sys.modules[__name__])
-    PS.init(sys.modules[__name__])
     try:   # меню команд у кнопки «/» в Telegram
         cmds = [{"command": "start", "description": "Главное меню"}]
         if AN.enabled():
@@ -1195,10 +1185,6 @@ def main():
             DG.tick(con)
         except Exception:
             log.exception("digest tick failed")
-        try:
-            PS.tick(con)
-        except Exception:
-            log.exception("posting tick failed")
         for upd in updates:
             offset = upd["update_id"] + 1
             try:

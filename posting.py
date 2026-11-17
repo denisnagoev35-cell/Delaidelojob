@@ -16,10 +16,9 @@
     («18.11 10:00 каждые 30 мин» или список времён) — бот выложит сам;
   • /ochered — что запланировано, с кнопками «сейчас» и «удалить».
 Посты, которые выкладывает бот, он сразу разбирает для подборки, рассылки и дайджеста.
-Подпись к фото — не больше 1024 знаков: если длиннее, бот просит YandexGPT сократить текст вакансии.
+Текст вакансии бот не переписывает. Подпись к фото — не больше 1024 знаков: если длиннее, бот предупредит.
 """
 import html
-import http.client
 import json
 import os
 import re
@@ -137,49 +136,13 @@ def limit_for(d):
     return CAPTION_MAX if d["file_id"] else TEXT_MAX
 
 
-SHORTEN_SYSTEM = (
-    "Сократи текст вакансии HoReCa до {n} знаков, сохранив: должность, заведение, адрес/метро, ставку и доплаты, "
-    "график, требования, условия и контакты для связи. Убери повторы, приветствия, лишние эмодзи и воду. "
-    "Ничего не выдумывай и не меняй цифры, телефоны и ники. Без хэштегов. Ответь только готовым текстом.")
-
-
-def gpt_shorten(body, n):
-    if not (B.PB.YC_KEY and B.PB.YC_FOLDER):
-        return None
-    req = {"modelUri": f"gpt://{B.PB.YC_FOLDER}/{B.PB.YC_MODEL}",
-           "completionOptions": {"stream": False, "temperature": 0.2, "maxTokens": "800"},
-           "messages": [{"role": "system", "text": SHORTEN_SYSTEM.format(n=n)},
-                        {"role": "user", "text": body[:3500]}]}
-    try:
-        c = http.client.HTTPSConnection("llm.api.cloud.yandex.net", timeout=40)
-        c.request("POST", "/foundationModels/v1/completion", body=json.dumps(req).encode(),
-                  headers={"Content-Type": "application/json", "Authorization": f"Api-Key {B.PB.YC_KEY}",
-                           "x-folder-id": B.PB.YC_FOLDER})
-        r = c.getresponse()
-        raw = r.read().decode()
-        c.close()
-        if r.status != 200:
-            B.log.warning("YandexGPT shorten %s: %s", r.status, raw[:300])
-            return None
-        out = json.loads(raw)["result"]["alternatives"][0]["message"]["text"].strip().strip("`").strip()
-        return clean_body(out) or None
-    except Exception as e:
-        B.log.warning("YandexGPT shorten failed: %s", e)
-        return None
-
-
 def fit(d):
-    """Если пост не влезает в лимит — пробуем сократить текст вакансии. Возвращает (d, заметка)."""
+    """Текст не меняем. Если с фото не влезает в 1024 знака — только предупреждаем. Возвращает (d, заметка)."""
     lim = limit_for(d)
     if tlen(render(d["body"], d["tags"])) <= lim:
         return d, ""
-    room = lim - tlen(render("", d["tags"])) - 4
-    short = gpt_shorten(d["body"], max(200, room - 40))
-    if short and tlen(render(short, d["tags"])) <= lim:
-        d["body"] = short
-        return d, "✂️ Текст был длиннее лимита — сократил через YandexGPT. Проверь, всё ли на месте."
-    return d, (f"⚠️ Пост длиннее {lim} знаков — с фото так нельзя. Сократи текст (кнопка «Заменить текст») "
-               f"или публикуй без фото.")
+    return d, (f"⚠️ Пост длиннее {lim} знаков ({tlen(render(d['body'], d['tags']))}) — с фото так нельзя. "
+               f"Сократи текст (кнопка «Заменить текст») или публикуй без фото.")
 
 
 def first_line(body, n=50):

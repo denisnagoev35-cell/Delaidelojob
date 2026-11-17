@@ -309,6 +309,43 @@ WANT_SCHEDULE = {
 
 
 BONUS_RE = re.compile(r"%|процент|чаев|\bчай\b|\bчай\s*\d|бонус|премии|премия", re.I)
+PCT_RE = re.compile(r"%|процент", re.I)
+NOT_PAY_RE = re.compile(r"скидк|налог|ндфл|предоплат|аванс|кешб|кэшб|оформлен|официальн|белая", re.I)
+TIPS_RE = re.compile(r"чаев|\bчай\b|\bчаи\b", re.I)
+PREM_RE = re.compile(r"бонус|\bпреми(?:и|я|ю|ей|ями?)\b", re.I)
+
+
+def parse_bonus_kind(text):
+    """Какие доплаты прямо названы в тексте: pct (% с кассы/бара), tips (чаевые), prem (бонусы, премии).
+    «Скидка 20% на меню», «100% официальное оформление» — не доплата."""
+    t = text or ""
+    kinds = []
+    for m in PCT_RE.finditer(t):
+        win = t[max(0, m.start() - 35):m.end() + 25]
+        if NOT_PAY_RE.search(win) or re.search(r"\b100\s*%", t[max(0, m.start() - 5):m.end()]):
+            continue
+        kinds.append("pct")
+        break
+    if TIPS_RE.search(t):
+        kinds.append("tips")
+    if PREM_RE.search(t):
+        kinds.append("prem")
+    return ",".join(kinds) or None
+
+
+BONUS_WORDS = {"pct": "%", "tips": "чаевые", "prem": "бонусы"}
+
+
+def bonus_str(r):
+    """« + % и чаевые» — только то, что есть в тексте вакансии."""
+    keys = r.keys()
+    kind = r["bonus_kind"] if "bonus_kind" in keys else None
+    if not kind:
+        return ""
+    words = [BONUS_WORDS[k] for k in kind.split(",") if k in BONUS_WORDS]
+    if not words:
+        return ""
+    return " + " + (words[0] if len(words) == 1 else ", ".join(words[:-1]) + " и " + words[-1])
 
 
 def parse_kind(text, tags, prof_keys):
@@ -330,7 +367,8 @@ def parse_rules(text, tags, prof_keys):
         cities.insert(0, MOSCOW) if metro else cities.append(MOSCOW)
     out["cities"] = cities
     out["city"] = cities[0] if cities else None
-    out["bonus"] = 1 if BONUS_RE.search(text) else 0
+    out["bonus_kind"] = parse_bonus_kind(text)
+    out["bonus"] = 1 if out["bonus_kind"] else 0
     out["kind"] = parse_kind(text, tags, prof_keys)
     out["metro"] = clean_metro(metro.group(1)) if metro else None
     out.update(parse_salary(text) or {"sal_min": None, "sal_max": None, "unit": None})
@@ -505,8 +543,9 @@ def from_gpt(g, prof_keys):
 # ---------- база ----------
 
 FIELDS = ("prof", "profs", "city", "cities", "metro", "sal_min", "sal_max", "unit", "schedule", "noexp",
-          "title", "bonus", "kind")
-NEW_COLS = {"title": "TEXT", "profs": "TEXT", "cities": "TEXT", "bonus": "INTEGER", "kind": "TEXT", "manual": "TEXT"}
+          "title", "bonus", "kind", "bonus_kind")
+NEW_COLS = {"title": "TEXT", "profs": "TEXT", "cities": "TEXT", "bonus": "INTEGER", "kind": "TEXT", "manual": "TEXT",
+            "bonus_kind": "TEXT"}
 
 
 def db_init(con):
@@ -542,6 +581,8 @@ def parse_post(text, tags, prof_keys, use_gpt=True):
         out["profs"] = []                 # подборки и промо в поиск не берём
     out["prof"] = out["profs"][0] if out.get("profs") else None
     out["city"] = out["cities"][0] if out.get("cities") else None
+    out["bonus_kind"] = rules["bonus_kind"]   # вид доплаты — только по тексту, нейросети не доверяем
+    out["bonus"] = rules["bonus"]
     by = "gpt" if g else "rules"
     return out, by
 
@@ -566,7 +607,7 @@ def store(con, message_id, date, text, fields, by):
         "cities": _join(f.get("cities") or [], "|"), "metro": f.get("metro"), "sal_min": f.get("sal_min"),
         "sal_max": f.get("sal_max"), "unit": f.get("unit"), "shift_eq": eq, "schedule": f.get("schedule"),
         "noexp": f.get("noexp"), "parsed_by": "manual" if manual else by, "title": f.get("title"),
-        "bonus": f.get("bonus"), "kind": f.get("kind"), "manual": json.dumps(manual, ensure_ascii=False) if manual else None,
+        "bonus": f.get("bonus"), "kind": f.get("kind"), "bonus_kind": f.get("bonus_kind"), "manual": json.dumps(manual, ensure_ascii=False) if manual else None,
     }
     cols = ", ".join(vals)
     con.execute(f"INSERT INTO vac(message_id, {cols}) VALUES(?{', ?' * len(vals)}) "
@@ -634,9 +675,7 @@ def salary_str(r):
     elif lo or hi:
         s = money(lo or hi) if lo == hi else (f"от {money(lo)}" if lo else f"до {money(hi)}")
     s = f"{s} {UNIT_TXT.get(u, '₽')}"
-    if "bonus" in r.keys() and r["bonus"]:
-        s += " + % или чаевые"   # бот знает только «есть доплата», не какая именно
-    return s
+    return s + bonus_str(r)
 
 
 def place_str(r):

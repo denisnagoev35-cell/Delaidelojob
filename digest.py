@@ -49,10 +49,8 @@ def salary_text(r):
         s = f"{m(lo)} ₽" if lo == hi else f"от {m(lo)} ₽"
     else:
         s = f"до {m(hi)} ₽"
-    s += " " + UNIT.get(u, "")
-    if r["bonus"]:
-        s += " + % или чаевые"
-    return s.strip()
+    s = (s + " " + UNIT.get(u, "")).strip()
+    return s + B.PB.bonus_str(r)
 
 
 def pick(con, days=DAYS, top=TOP):

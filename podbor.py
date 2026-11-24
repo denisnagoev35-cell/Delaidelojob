@@ -219,6 +219,7 @@ def _unit_of(tail, value):
 
 
 LIMITS = {"hour": (150, 3000), "shift": (1000, 40000), "month": (20000, 500000)}
+SHIFT_HI_MAX = 12000   # смена дороже — значит, нейросеть склеила ставку с другой выплатой (см. gpt-разбор)
 
 
 def parse_salary(text):
@@ -537,7 +538,7 @@ def from_gpt(g, prof_keys):
     lo, hi = _int(g.get("salary_min")), _int(g.get("salary_max"))
     if unit and (lo or hi):
         mn, mx = LIMITS[unit]
-        if lo and hi and hi > lo * 3:
+        if unit == "shift" and lo and hi and hi > lo * 3 and hi > SHIFT_HI_MAX:
             hi = None   # «6 000 за смену» + «30 000 в месяц за шефские» — не вилка, а разные выплаты
         if all(v is None or mn <= v <= mx for v in (lo, hi)):
             out.update(sal_min=lo, sal_max=hi, unit=unit)

@@ -183,9 +183,9 @@ function render(){
 render();
 </script>
 <script>
-// Директ: люди с utm_source=yandex идут в бота с меткой ya_direct, остальные — как раньше (vk_ads_bot).
+// Директ: люди с utm_source=yandex идут в бота с меткой ya_<ClientID Метрики> (бот шлёт конверсии в Метрику), запасной вариант — ya_direct; остальные — как раньше (vk_ads_bot).
 // Для Директа кнопка канала серая, главная — бот: через бота подписываются примерно вдвое чаще (17.11: 6 из 9 против 5 из 39).
-(function(){try{var s=new URLSearchParams(location.search).get('utm_source');if(s==='yandex'){document.getElementById('bot-btn').href='https://t.me/delaidelo24bot?start=ya_direct';var ch=document.getElementById('ch-btn');ch.href='https://t.me/+rLkyxOu5GEo4YWFi';ch.className='btn btn-sec muted';}}catch(e){}})();
+(function(){try{var s=new URLSearchParams(location.search).get('utm_source');if(s==='yandex'){var bb=document.getElementById('bot-btn');bb.href='https://t.me/delaidelo24bot?start=ya_direct';try{ym(113889494,'getClientID',function(id){if(/^\d{6,30}$/.test(String(id)))bb.href='https://t.me/delaidelo24bot?start=ya_'+id;});}catch(e){}var ch=document.getElementById('ch-btn');ch.href='https://t.me/+rLkyxOu5GEo4YWFi';ch.className='btn btn-sec muted';}}catch(e){}})();
 </script>
 </body>
 </html>

@@ -19,6 +19,7 @@ import anketa as AN
 import digest as DG
 import podbor as PB
 import texts as T
+import ymconv as YM
 
 log = logging.getLogger("ddbot")
 
@@ -176,6 +177,7 @@ def db_connect(path=None):
       PRIMARY KEY(user_id, message_id));
     """)
     con.executescript(AN.SCHEMA)
+    con.executescript(YM.SCHEMA)
     con.commit()
     return con
 
@@ -383,9 +385,15 @@ def on_start(con, msg):
     uid = msg["from"]["id"]
     parts = (msg.get("text") or "").split(maxsplit=1)
     payload = parts[1] if len(parts) > 1 else ""
-    source = payload if SOURCE_RE.match(payload) else None
+    src, ym_cid = YM.parse(payload)   # ya_<ClientID Метрики> → ya_direct
+    source = src if SOURCE_RE.match(src or "") else None
     touch_user(con, uid, source)
     event(con, uid, "start", source or "")
+    if ym_cid:
+        try:
+            YM.on_start(con, uid, ym_cid)
+        except Exception:
+            log.exception("ym on_start failed")
     chat = msg["chat"]["id"]
     if AN.enabled():
         if payload == "anketa":
@@ -421,7 +429,7 @@ def on_stats(con, msg):
     lines += [f"• {T.PROFESSIONS.get(r['profession'], {}).get('name', r['profession'])}: {r['c']}"
               for r in by_prof] or ["—"]
     posts = q("SELECT COUNT(*) c FROM posts WHERE closed=0")[0]["c"]
-    lines += ["", f"Вакансий в базе бота: {posts}"]
+    lines += ["", f"Вакансий в базе бота: {posts}", YM.stats_line(con)]
     send(msg["chat"]["id"], "\n".join(lines))
 
 
@@ -502,6 +510,7 @@ def on_callback(con, cq):
             if u and not u["subscribed"]:
                 set_user(con, uid, subscribed=1, sub_at=int(time.time()))
                 event(con, uid, "subscribed")
+            YM.on_subscribed(con, uid)
             event(con, uid, "full", prof)
             send(chat_id, full_text(con, prof), final_kb(uid))
         else:
@@ -1154,6 +1163,7 @@ def main():
     BOT_USERNAME = me.get("username") or BOT_USERNAME
     AN.init(sys.modules[__name__])
     DG.init(sys.modules[__name__])
+    YM.init(sys.modules[__name__])
     try:   # меню команд у кнопки «/» в Telegram
         cmds = [{"command": "start", "description": "Главное меню"}]
         if AN.enabled():
@@ -1185,6 +1195,10 @@ def main():
             DG.tick(con)
         except Exception:
             log.exception("digest tick failed")
+        try:
+            YM.tick(con)
+        except Exception:
+            log.exception("ym tick failed")
         for upd in updates:
             offset = upd["update_id"] + 1
             try:

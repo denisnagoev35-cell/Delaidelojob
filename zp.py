@@ -123,7 +123,7 @@ def table(con):
         all_rows = rows(con, k)
         if calc(all_rows):
             parts.append("опыт: " + " / ".join(
-                short(calc(all_rows, QUANT[e])).split(" ₽")[0] for e in ("lt1", "1to3", "gt3")) + " (<1 / 1–3 / 3+)")
+                short(calc(all_rows, QUANT[e])).split(" ₽")[0] for e in ("lt1", "1to3", "gt3")) + " (до года / 1–3 / 3+)")
         res0 = calc(rows(con, k, None, True))
         parts.append(f"без опыта: {short(res0)} ({res0[3]})" if res0 else "без опыта: мало")
         lines.append(f"<b>{p['name']}</b> — сейчас в боте: {p['range']}")

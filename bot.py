@@ -20,6 +20,7 @@ import anketa as AN
 import digest as DG
 import podbor as PB
 import remind as RM
+import zp as ZP
 import texts as T
 import ymconv as YM
 
@@ -366,12 +367,21 @@ def final_kb(uid=None):
     ])
 
 
-def result_text(prof_key, region_key, exp_key):
+def result_text(prof_key, region_key, exp_key, con=None, uid=None):
     p = T.PROFESSIONS[prof_key]
     note = p["exp"].get(exp_key) or T.EXP_NOTE[exp_key]
+    rng = p.get("range_by_exp", {}).get(exp_key) or p["range"]
+    source = p["source"]
+    if con is not None and ZP.live_for(uid):   # вилка по живым вакансиям канала, если их хватает
+        try:
+            live = ZP.pick(con, prof_key, region_key, exp_key)
+        except Exception:
+            log.exception("zp pick failed")
+            live = None
+        if live:
+            rng, source = live
     return T.RESULT.format(emoji=p["emoji"], name=p["name"], region=T.REGIONS[region_key],
-                           range=p.get("range_by_exp", {}).get(exp_key) or p["range"],
-                           source=p["source"], exp_note=note)
+                           range=html.escape(rng), source=html.escape(source), exp_note=note)
 
 
 def full_text(con, prof_key):
@@ -516,7 +526,7 @@ def on_callback(con, cq):
         if prof in T.PROFESSIONS and reg in T.REGIONS and exp in T.EXPERIENCE:
             set_user(con, uid, exp=exp)
             event(con, uid, "result", f"{prof}:{reg}:{exp}")
-            edit(chat_id, mid, result_text(prof, reg, exp),
+            edit(chat_id, mid, result_text(prof, reg, exp, con, uid),
                  kb([[("🔓 Открыть полный разбор", f"f:{prof}")],
                      [("🔁 Другая профессия", "restart")]]))
     elif data.startswith("f:") and data[2:] in T.PROFESSIONS:
@@ -594,6 +604,9 @@ def on_admin(con, msg, text):
     chat = msg["chat"]["id"]
     cmd, *args = text.split()
     cmd = cmd.split("@")[0].lower()
+    if cmd == "/zp":
+        send(chat, ZP.table(con))
+        return
     if cmd == "/podbor":
         uid = msg["from"]["id"]
         st = pb_get(con, uid)
@@ -1181,6 +1194,7 @@ def main():
     DG.init(sys.modules[__name__])
     YM.init(sys.modules[__name__])
     RM.init(sys.modules[__name__])
+    ZP.init(sys.modules[__name__])
     try:   # меню команд у кнопки «/» в Telegram
         cmds = [{"command": "start", "description": "Главное меню"}]
         if AN.enabled():

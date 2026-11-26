@@ -74,7 +74,8 @@ def rows(con, prof, region=None, noexp=None, days=DAYS, level=None):
 
 
 # какую часть ставок показываем по опыту: доли от 0 (самая низкая) до 1 (самая высокая)
-QUANT = {"none": (0.10, 0.50), "lt1": (0.25, 0.50), "1to3": (0.25, 0.75), "gt3": (0.50, 0.90)}
+QUANT = {"none": (0.10, 0.50), "lt1": (0.25, 0.50), "1to3": (0.25, 0.75), "gt3": (0.50, 0.85)}
+ORDER = ["none", "lt1", "1to3", "gt3"]
 
 
 def calc(rs, qs=(0.25, 0.75)):
@@ -98,9 +99,8 @@ def fmt(prof, res):
     return f"{s} {UNIT_TXT[unit]}{EXTRA.get(prof, '')}"
 
 
-def pick(con, prof, region, exp):
-    """Живая вилка: регион и опыт, если данных хватает, иначе шире. → (текст, подпись) или None."""
-    if prof not in EXTRA: return None
+def _tier(con, prof, region, exp):
+    """→ (res, region, level) для одной ступени опыта, без поправок."""
     q = QUANT.get(exp, (0.25, 0.75))
     if exp == "none":     # вакансии начального уровня (помощник, стажёр, без опыта), иначе нижняя часть всех
         tries = [(region, "entry", (0.25, 0.75)), (None, "entry", (0.25, 0.75)), (region, None, q), (None, None, q)]
@@ -110,11 +110,32 @@ def pick(con, prof, region, exp):
         tries = [(region, None, q), (None, None, q)]
     for reg, level, qs in tries:
         res = calc(rows(con, prof, reg, level=level), qs)
-        if res:
-            where = {"msk": " в Москве", "mo": " в Подмосковье"}.get(reg, "")
-            what = " для начинающих" if level == "entry" else ""
-            return fmt(prof, res), f"по {res[3]} вакансиям канала{what}{where} за {DAYS} дней"
+        if res: return res, reg, level
     return None
+
+
+def tier(con, prof, region, exp):
+    """Ступень опыта с поправкой: не ниже предыдущей ступени (опытный не получает меньше новичка)."""
+    t = _tier(con, prof, region, exp)
+    if not t or exp not in ORDER: return t
+    (unit, lo, hi, n), reg, level = t
+    i = ORDER.index(exp)
+    if i > 0:
+        prev = tier(con, prof, region, ORDER[i - 1])
+        if prev and prev[0][0] == unit:
+            lo, hi = max(lo, prev[0][1]), max(hi, prev[0][2])
+    return (unit, lo, hi, n), reg, level
+
+
+def pick(con, prof, region, exp):
+    """Живая вилка: регион и опыт, если данных хватает, иначе шире. → (текст, подпись) или None."""
+    if prof not in EXTRA: return None
+    t = tier(con, prof, region, exp)
+    if not t: return None
+    res, reg, level = t
+    where = {"msk": " в Москве", "mo": " в Подмосковье"}.get(reg, "")
+    what = " для начинающих" if level == "entry" else ""
+    return fmt(prof, res), f"по {res[3]} вакансиям канала{what}{where} за {DAYS} дней"
 
 
 def short(res):
@@ -133,12 +154,10 @@ def table(con):
             res = calc(rows(con, k, reg))
             n = len(rows(con, k, reg))
             parts.append(f"{title}: {short(res)} ({res[3]})" if res else f"{title}: мало ({n})")
-        all_rows, senior = rows(con, k), rows(con, k, level="senior")
         tiers = []
         for e in ("lt1", "1to3", "gt3"):
-            base = all_rows if e == "lt1" or not calc(senior) else senior
-            r = calc(base, QUANT[e])
-            tiers.append(short(r).split(" ₽")[0] if r else "—")
+            t = tier(con, k, None, e)
+            tiers.append(short(t[0]).split(" ₽")[0] if t else "—")
         parts.append("опыт: " + " / ".join(tiers) + " (до года / 1–3 / 3+)")
         res0 = calc(rows(con, k, level="entry"))
         n0 = len(rows(con, k, level="entry"))

@@ -6,7 +6,7 @@
 ZP_MODE: on — всем; test (по умолчанию) — живые цифры видят только админы; off — выключено.
 Админу: /zp — таблица по всем профессиям.
 """
-import os, time
+import os, re, time
 
 MODE = os.environ.get("ZP_MODE", "test").strip().lower()
 DAYS = 30
@@ -16,6 +16,9 @@ STEP = {"shift": 500, "hour": 10, "month": 5000}
 # хвост, который не вытащить из ставки: проценты и чаевые
 EXTRA = {"kalyan": " + % и чаевые", "bar": " + % и чаевые", "barista": " + чаевые", "waiter": " + % и чаевые",
          "cook": "", "hostess": " + чаевые", "staff": ""}
+
+# вакансии начального уровня: для опытных их не берём, для новичков — берём
+ENTRY_RE = re.compile(r"помощник|стаж[её]р|стажировк|ученик|без опыта|обучим с нуля", re.I)
 
 B = None
 
@@ -44,7 +47,13 @@ def _round(v, unit):
     s = STEP[unit]; return int(round(v / s) * s)
 
 
-def rows(con, prof, region=None, noexp=None, days=DAYS):
+def is_entry(r):
+    head = (r["title"] if "title" in r.keys() and r["title"] else "") + "\n" + "\n".join((r["text"] or "").splitlines()[:3])
+    return bool(r["noexp"]) or bool(ENTRY_RE.search(head))
+
+
+def rows(con, prof, region=None, noexp=None, days=DAYS, level=None):
+    """level: None — все; 'entry' — начальный уровень (помощник, стажёр, без опыта); 'senior' — без них."""
     since = int(time.time()) - days * 86400
     out, seen = [], set()
     for r in con.execute(
@@ -56,6 +65,8 @@ def rows(con, prof, region=None, noexp=None, days=DAYS):
         if region == "msk" and B.PB.MOSCOW not in cities: continue
         if region == "mo" and not [c for c in cities if c != B.PB.MOSCOW]: continue
         if noexp and not r["noexp"]: continue
+        if level == "entry" and not is_entry(r): continue
+        if level == "senior" and is_entry(r): continue
         key = B.PB.dup_key(r)
         if key in seen: continue
         seen.add(key); out.append(r)
@@ -90,16 +101,18 @@ def fmt(prof, res):
 def pick(con, prof, region, exp):
     """Живая вилка: регион и опыт, если данных хватает, иначе шире. → (текст, подпись) или None."""
     if prof not in EXTRA: return None
-    tries = []
-    if exp == "none":   # сначала вакансии, где опыт не нужен, — их середина
-        tries += [(region, True, (0.25, 0.75)), (None, True, (0.25, 0.75))]
-    q = QUANT.get(exp, (0.25, 0.75))   # иначе — нужная по опыту часть всех ставок
-    tries += [(region, None, q), (None, None, q)]
-    for reg, noexp, qs in tries:
-        res = calc(rows(con, prof, reg, noexp), qs)
+    q = QUANT.get(exp, (0.25, 0.75))
+    if exp == "none":     # вакансии начального уровня (помощник, стажёр, без опыта), иначе нижняя часть всех
+        tries = [(region, "entry", (0.25, 0.75)), (None, "entry", (0.25, 0.75)), (region, None, q), (None, None, q)]
+    elif exp in ("1to3", "gt3"):   # опытным — без вакансий помощников и стажёров
+        tries = [(region, "senior", q), (None, "senior", q), (region, None, q), (None, None, q)]
+    else:
+        tries = [(region, None, q), (None, None, q)]
+    for reg, level, qs in tries:
+        res = calc(rows(con, prof, reg, level=level), qs)
         if res:
             where = {"msk": " в Москве", "mo": " в Подмосковье"}.get(reg, "")
-            what = " без опыта" if noexp else ""
+            what = " для начинающих" if level == "entry" else ""
             return fmt(prof, res), f"по {res[3]} вакансиям канала{what}{where} за {DAYS} дней"
     return None
 
@@ -120,12 +133,16 @@ def table(con):
             res = calc(rows(con, k, reg))
             n = len(rows(con, k, reg))
             parts.append(f"{title}: {short(res)} ({res[3]})" if res else f"{title}: мало ({n})")
-        all_rows = rows(con, k)
-        if calc(all_rows):
-            parts.append("опыт: " + " / ".join(
-                short(calc(all_rows, QUANT[e])).split(" ₽")[0] for e in ("lt1", "1to3", "gt3")) + " (до года / 1–3 / 3+)")
-        res0 = calc(rows(con, k, None, True))
-        parts.append(f"без опыта: {short(res0)} ({res0[3]})" if res0 else "без опыта: мало")
+        all_rows, senior = rows(con, k), rows(con, k, level="senior")
+        tiers = []
+        for e in ("lt1", "1to3", "gt3"):
+            base = all_rows if e == "lt1" or not calc(senior) else senior
+            r = calc(base, QUANT[e])
+            tiers.append(short(r).split(" ₽")[0] if r else "—")
+        parts.append("опыт: " + " / ".join(tiers) + " (до года / 1–3 / 3+)")
+        res0 = calc(rows(con, k, level="entry"))
+        n0 = len(rows(con, k, level="entry"))
+        parts.append(f"начинающие: {short(res0)} ({res0[3]})" if res0 else f"начинающие: мало ({n0})")
         lines.append(f"<b>{p['name']}</b> — сейчас в боте: {p['range']}")
         lines.append("   " + " · ".join(parts))
     return "\n".join(lines)

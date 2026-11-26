@@ -14,10 +14,12 @@ import socket
 import sqlite3
 import sys
 import time
+import urllib.parse
 
 import anketa as AN
 import digest as DG
 import podbor as PB
+import remind as RM
 import texts as T
 import ymconv as YM
 
@@ -178,6 +180,7 @@ def db_connect(path=None):
     """)
     con.executescript(AN.SCHEMA)
     con.executescript(YM.SCHEMA)
+    con.executescript(RM.SCHEMA)
     con.commit()
     return con
 
@@ -340,12 +343,23 @@ def professions_kb(uid=None):
     return kb(rows)
 
 
+SHARE_TEXT = ("Узнай, сколько платят в HoReCa в Москве и МО за смену — "
+              "бот считает за 10 секунд и присылает свежие вакансии 👇")
+
+
+def share_url():
+    """«Отправить другу»: Telegram откроет выбор чата с готовым текстом и ссылкой (метка share)."""
+    link = f"https://t.me/{BOT_USERNAME}?start=share"
+    return "https://t.me/share/url?" + urllib.parse.urlencode({"url": link, "text": SHARE_TEXT})
+
+
 def final_kb(uid=None):
     top = [[PODBOR_BTN]] if uid is not None and podbor_allowed(uid) else []
     anketa_btn = ("📝 Оставить анкету", "an:start") if uid is not None and AN.allowed(uid) \
         else ("📝 Оставить анкету", T.ANKETA_URL)
     return kb(top + [
         [("📢 Все вакансии в канале", CHANNEL_INVITE)],
+        [("📤 Отправить другу", share_url())],
         [anketa_btn],
         [("🛵 Подработка курьером", T.COURIER_URL)],
         [("🔁 Другая профессия", "restart"), ("🏪 Я работодатель", "emp")],
@@ -429,7 +443,7 @@ def on_stats(con, msg):
     lines += [f"• {T.PROFESSIONS.get(r['profession'], {}).get('name', r['profession'])}: {r['c']}"
               for r in by_prof] or ["—"]
     posts = q("SELECT COUNT(*) c FROM posts WHERE closed=0")[0]["c"]
-    lines += ["", f"Вакансий в базе бота: {posts}", YM.stats_line(con)]
+    lines += ["", f"Вакансий в базе бота: {posts}", YM.stats_line(con), RM.stats_line(con)]
     send(msg["chat"]["id"], "\n".join(lines))
 
 
@@ -455,6 +469,8 @@ def on_callback(con, cq):
         AN.emp_callback(con, uid, chat_id, mid, data)
     elif data.startswith("an:") and AN.allowed(uid):
         AN.callback(con, cq, uid, chat_id, mid, data)
+    elif data.startswith("rm:"):
+        RM.callback(con, uid, chat_id, mid, data)
     elif data.startswith("sb:") and podbor_allowed(uid):
         sub_callback(con, uid, chat_id, mid, data)
     elif data == "pb:start" and podbor_allowed(uid):
@@ -515,7 +531,7 @@ def on_callback(con, cq):
             send(chat_id, full_text(con, prof), final_kb(uid))
         else:
             event(con, uid, "need_sub", prof)
-            if mid and (msg.get("text") or "").startswith("🔒"):
+            if mid and (msg.get("text") or "").startswith(("🔒", "👋")):
                 answer_text = T.NOT_SUBSCRIBED_YET
             else:
                 send(chat_id, T.NEED_SUB,
@@ -1164,6 +1180,7 @@ def main():
     AN.init(sys.modules[__name__])
     DG.init(sys.modules[__name__])
     YM.init(sys.modules[__name__])
+    RM.init(sys.modules[__name__])
     try:   # меню команд у кнопки «/» в Telegram
         cmds = [{"command": "start", "description": "Главное меню"}]
         if AN.enabled():
@@ -1199,6 +1216,10 @@ def main():
             YM.tick(con)
         except Exception:
             log.exception("ym tick failed")
+        try:
+            RM.tick(con)
+        except Exception:
+            log.exception("remind tick failed")
         for upd in updates:
             offset = upd["update_id"] + 1
             try:

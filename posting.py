@@ -126,6 +126,30 @@ EXTRA_TAGS = [
 ]
 
 
+# должность → профессии (все, что есть в названии: «Бармен-бариста» → бармен и бариста)
+TITLE_WORDS = [
+    ("kalyan", r"кал[ьл]ян|\bкм\b"),
+    ("bar", r"бармен|бартендер|миксолог"),
+    ("barista", r"бариста"),
+    ("waiter", r"официант|раннер"),
+    ("cook", r"повар|шеф|сушист|пицц|кондитер|пекар|заготовщ|кухн|кухон|гриль|шаурм"),
+    ("hostess", r"хост[еэ]с|администратор|\bадмин"),
+    ("staff", r"посудомо|уборщ|клинер|клининг|мойщ|техничк|хозперсонал"),
+    ("courier", r"курьер|доставщик"),
+]
+
+
+def title_tags(titles):
+    """Хэштеги по названиям должностей от нейросети; порядок — как в названиях."""
+    found = []
+    for t in (titles or "").lower().splitlines():
+        hits = sorted((m.start(), k) for k, rx in TITLE_WORDS for m in [re.search(rx, t)] if m)
+        for _, k in hits:
+            if k not in found:
+                found.append(k)
+    return hashtags(titles or "", [B.PROF_TAGS[k] for k in found if k in B.PROF_TAGS])
+
+
 def hashtags(text, tags=()):
     """Наши хэштеги: профессии (по хэштегам исходника и словам) + #км, #пкм, #универсал по должностям."""
     profs = PB.find_profs(text, list(tags), B.PROF_TAGS) or []
@@ -584,9 +608,47 @@ def _nums(t):
     return {int(x) for x in re.findall(r"\d+", t) if 100 <= int(x) < 10_000_000}
 
 
-def checks(d):
-    """Предупреждения к превью: выдуманные цифры, нет контакта."""
+DISCR_RE = re.compile(r"девушк|\bпарн(?:я|ей|и)\b|мужчин|женщин|\bдо\s+\d{2}\s*лет|от\s+\d{2}\s+до\s+\d{2}\s*лет|"
+                      r"славян|внешност|национальн|гражданств|прописк|\bрегистрац", re.I)
+
+
+def _digits(x):
+    return re.sub(r"\D", "", x)[-10:]
+
+
+def dup_post(con, d, days=21):
+    """Номер поста канала за 3 недели с тем же телефоном или @ником, или None."""
+    keys = [c.lower() for c in d.get("contacts", []) if c.startswith("@")] + \
+           [_digits(c) for c in d.get("contacts", []) if len(_digits(c)) == 10]
+    if not keys or con is None:
+        return None
+    since = int(time.time()) - days * 86400
+    for r in con.execute("SELECT message_id, text FROM posts WHERE date>=? ORDER BY date DESC LIMIT 400", (since,)):
+        low, dig = (r["text"] or "").lower(), re.sub(r"\D", "", r["text"] or "")
+        if any((k.startswith("@") and k in low) or (not k.startswith("@") and k in dig) for k in keys):
+            return r["message_id"]
+    return None
+
+
+def checks(d, con=None):
+    """Предупреждения к превью: выдуманные цифры, нет контакта, адреса, ставки, хэштега; закрыта; дубль; дискриминация."""
     out = []
+    src = d.get("src", "")
+    if B.is_closed(src):
+        out.append("⚠️ В исходнике написано, что вакансия закрыта / неактуальна.")
+    n = dup_post(con, d)
+    if n:
+        out.append(f"⚠️ Похоже, уже публиковали: <a href=\"{B.post_link(n)}\">пост №{n}</a> (тот же контакт).")
+    if d.get("by") == "gpt" and not re.search(r"^#", d.get("text", "")):
+        out.append("⚠️ Не понял профессию — хэштега нет. Добавь через «✏️ Исправить».")
+    plain = html.unescape(re.sub(r"<[^>]+>", "", d.get("text", "")))
+    kinds = {"пол": r"девушк|\bпарн(?:я|ей|и)\b|мужчин|женщин", "возраст": r"\bдо\s+\d{2}\s*лет|от\s+\d{2}\s+до\s+\d{2}\s*лет",
+             "внешность": r"славян|внешност", "национальность": r"национальн",
+             "гражданство/прописка": r"гражданств|прописк|\bрегистрац"}
+    bad = [k for k, rx in kinds.items() if re.search(rx, plain, re.I)]
+    if bad:
+        out.append("⚠️ Есть требования: " + ", ".join(bad) + " — в объявлениях о работе такое могут счесть "
+                   "дискриминацией. Лучше убрать через «✏️ Исправить».")
     head = d.get("text", "").split("<blockquote", 1)[0]
     src = _nums(d.get("src", "")) | {n * 1000 for n in _nums(d.get("src", "")) if n < 1000}
     bad = sorted(n for n in _nums(head) - src if not re.search(rf"#\w*{n}", head))
@@ -608,7 +670,7 @@ def preview(con, uid, chat):
     """Пост так, как он уйдёт в канал (с обложкой — фото с подписью), и кнопки под ним."""
     d = _get(con, uid)
     text = d.get("text", "")
-    notes = checks(d)
+    notes = checks(d, con)
     if d.get("by") == "raw":
         notes.append("⚠️ Нейросеть не ответила — текст только очищен. «🔁 Переписать ещё» или «✏️ Исправить».")
     if plain_len(text) > _limit(con, d):
@@ -687,7 +749,7 @@ def _rewrite(con, uid, d):
         titles = "\n".join(_s(p.get("title")) for p in g.get("positions", []) if isinstance(p, dict))
         # хэштеги — по названиям должностей (в тексте уборщицы есть «чистка кальянов» — это не #км);
         # #пкм/#универсал из исходника добавляем, только если такая должность есть
-        own = hashtags(titles)
+        own = title_tags(titles)
         d["tags"] = own or d["tags"]
         d["text"] = render_fit(g, d["tags"], d["contacts"], CAPTION_MAX - 24)
     else:   # без нейросети — очищенный исходник без контактов (они уйдут строкой «Отклик»)

@@ -298,7 +298,7 @@ def render(g, tags, conts, cut=0):
         if EMPTY_RE.search(sch):
             sch = ""
         det = [x for x in _list(p.get("details"), 6 if len(pos) == 1 else 4, 90) if not _dup(x, sch)]
-        req = [x[:1].lower() + x[1:] if not x[:2].isupper() else x for x in _list(p.get("requirements"), 6, 45)]
+        req = [x if re.match(r"[A-ZА-ЯЁ]{2}", x) else x[:1].lower() + x[1:] for x in _list(p.get("requirements"), 6, 45)]
         head = (f"<b>{e(_s(p.get('title'), 60))}</b>" if len(pos) > 1 else "") + \
                (f"{' · ' if len(pos) > 1 else ''}🗓 {e(sch)}" if sch else "")
         blocks.append([head] if head else [])
@@ -312,13 +312,13 @@ def render(g, tags, conts, cut=0):
     perks = perks[:max(0, len(perks) - max(0, cut - len(flat)))]
     body = "\n\n".join("\n".join(x for x in b if x) for b in blocks if any(b))
     if perks:
-        pk = "; ".join(x if x[:2].isupper() else x[:1].lower() + x[1:] for x in perks)
+        pk = "; ".join(x if re.match(r"[A-ZА-ЯЁ]{2}", x) else x[:1].lower() + x[1:] for x in perks)
         body += ("\n\n" if body else "") + "✅ " + e(pk[:1].upper() + pk[1:])
     if body:
         lines += ["", f"<blockquote expandable>{body}</blockquote>"]
     note = _s(g.get("contact_note"), 140)
     note = "" if EMPTY_RE.search(note) else note
-    if conts and note and not note[:2].isupper():
+    if conts and note and not re.match(r"[A-ZА-ЯЁ]{2}", note):   # «В телеграм» → «в телеграм», «HR» не трогаем
         note = note[:1].lower() + note[1:]
     if conts or note:
         lines += ["", "📩 <b>Отклик:</b> " + e(", ".join(conts)) + (f" ({e(note)})" if conts and note else e(note))]

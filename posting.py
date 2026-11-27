@@ -127,9 +127,13 @@ EXTRA_TAGS = [
 
 
 def hashtags(text, tags=()):
-    """Наши хэштеги: профессии (по хэштегам исходника и словам) + #пкм, #универсал по должностям."""
+    """Наши хэштеги: профессии (по хэштегам исходника и словам) + #км, #пкм, #универсал по должностям."""
     profs = PB.find_profs(text, list(tags), B.PROF_TAGS) or []
     out = [B.PROF_TAGS[p] for p in profs if p in B.PROF_TAGS]
+    # #км — кальянный мастер (не помощник): убираем «помощник кальянного мастера» и ищем мастера/кальянщика
+    rest = re.sub(r"помо[щш]ни\w*\s+(?:кал[ьл]ян\w*(?:\s+мастер\w*)?|км\b)", " ", text or "", flags=re.I)
+    if "#км" not in out and re.search(r"кал[ьл]ян\w*\s+мастер|кальянщик|(?<!\w)#?км\b", rest, re.I):
+        out.append("#км")
     for rx, tag in EXTRA_TAGS:
         if tag not in out and re.search(rx, text or "", re.I):
             out.append(tag)

@@ -592,11 +592,19 @@ def vac_card(con, n):
 
 def ask_admins(con, n, missing):
     PB.set_field(con, n, asked=1)
-    text = (vac_card(con, n) + f"\n\n❓ Не нашёл {' и '.join(missing)}.\n"
-            f"Место: <code>/mesto {n} Химки</code>\nСтавка: <code>/stavka {n} 4000-6000 смена</code>")
+    # только то, чего не хватает; цифры и город — образец, вписать свои
+    how = []
+    if "место" in missing:
+        how.append(f"Место (город из поста): <code>/mesto {n} Город</code>")
+    if "ставку" in missing:
+        how.append(f"Ставка из поста (если есть): <code>/stavka {n} 4000-6000 смена</code> — цифры замени на свои")
+    text = (vac_card(con, n) + f"\n\n❓ Не нашёл {' и '.join(missing)} — без этого пост не попадёт "
+            f"в подборку с фильтром, в дайджест и /zp.\n" + "\n".join(how) +
+            ("\nВ посте ставки нет — жми «Пропустить»." if "ставку" in missing else ""))
+    btns = ([("📍 Москва", f"pm:{n}:msk")] if "место" in missing else []) + [("Пропустить", f"pm:{n}:skip")]
     for aid in ADMIN_IDS:
         try:
-            send(aid, text, kb([[("📍 Москва", f"pm:{n}:msk"), ("Пропустить", f"pm:{n}:skip")]]))
+            send(aid, text, kb([btns]))
         except TgError as e:
             log.warning("ask_admins: %s", e)
 

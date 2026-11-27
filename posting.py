@@ -158,8 +158,9 @@ GPT_SYSTEM = (
     '   {"title": "Кальянный мастер" — должность с большой буквы, без «требуется»,\n'
     '    "pay": "2 000 ₽ за смену + 10% + чай" — коротко, только деньги, или null,\n'
     '    "schedule": "2/2, 3/3 · 13:00–02:00, пт–сб до 04:00" или null,\n'
-    '    "details": ["до 6 пунктов, каждый до 80 знаков: доход в месяц, что делать (все обязанности кратко), '
-    'кого ждём (возраст, опыт, качества) — график сюда НЕ повторяй"]}],\n'
+    '    "details": ["до 6 пунктов, КАЖДЫЙ — одна короткая мысль до 70 знаков, без слов «обязанности:» и '
+    '«требования:», не склеивай список через запятые: доход в месяц, главные обязанности, кого ждём '
+    '(возраст, опыт) — график сюда НЕ повторяй"]}],\n'
     ' "perks": ["до 4 общих плюсов, только те, что есть в тексте: такси, выплаты раз в 2 недели, скидки, обучение '
     '— до 60 знаков"],\n'
     ' "contact_note": "как откликаться БЕЗ номеров и ников: что прислать (о себе, опыт, фото), мессенджер, имя, '
@@ -235,10 +236,32 @@ def _cap(x):
     return x[:1].upper() + x[1:] if x else x
 
 
+LABEL_RE = re.compile(r"^(?:обязанност\w*|требовани\w*|что делать|кого ждём|кого ждем|условия|задачи|"
+                      r"мы предлагаем|что даём|что даем|важно)\s*[:—-]\s*", re.I)
+
+
+def _cut(x, limit):
+    """Обрезка по целому слову с «…»."""
+    if len(x) <= limit:
+        return x
+    x = x[:limit].rsplit(" ", 1)[0].rstrip(" ,;—-")
+    return x + "…"
+
+
 def _list(v, n, limit):
-    items = (_s(re.sub(r"(?<![\w.])@\w+", "", i) if isinstance(i, str) else i, limit)
-             for i in (v if isinstance(v, list) else []))
-    return [x for x in items if x and not _call_only(x) and not EMPTY_RE.search(x)][:n]
+    """Пункты: без контактов и «не указано»; «обязанности: а, б, в» → отдельные пункты; с заглавной; по слову."""
+    out = []
+    for i in (v if isinstance(v, list) else []):
+        if not isinstance(i, str):
+            continue
+        x = LABEL_RE.sub("", _s(re.sub(r"(?<![\w.])@\w+", "", i), 400))
+        if not x or _call_only(x) or EMPTY_RE.search(x):
+            continue
+        parts = [x]
+        if len(x) > limit:   # склеенный список — режем по запятым/точкам с запятой (не внутри чисел)
+            parts = [p.strip() for p in re.split(r"[;,](?!\d)\s+", x) if p.strip()]
+        out += [_cut(_cap(p), limit) for p in parts]
+    return out[:n]
 
 
 def render(g, tags, conts, cut=0):
@@ -263,7 +286,7 @@ def render(g, tags, conts, cut=0):
         sch = _cap(_s(p.get("schedule"), 80))
         if EMPTY_RE.search(sch):
             sch = ""
-        det = [x for x in _list(p.get("details"), 6 if len(pos) == 1 else 4, 90) if not _dup(x, sch)]
+        det = [x for x in _list(p.get("details"), 8 if len(pos) == 1 else 4, 90) if not _dup(x, sch)]
         head = (f"<b>{e(_s(p.get('title'), 60))}</b>" if len(pos) > 1 else "") + \
                (f"{' · ' if len(pos) > 1 else ''}🗓 {e(sch)}" if sch else "")
         blocks.append([head] if head else [])
@@ -281,6 +304,8 @@ def render(g, tags, conts, cut=0):
         lines += ["", f"<blockquote expandable>{body}</blockquote>"]
     note = _s(g.get("contact_note"), 140)
     note = "" if EMPTY_RE.search(note) else note
+    if conts and note and not note[:2].isupper():
+        note = note[:1].lower() + note[1:]
     if conts or note:
         lines += ["", "📩 <b>Отклик:</b> " + e(", ".join(conts)) + (f" ({e(note)})" if conts and note else e(note))]
     lines += ["", e(FOOTER)]

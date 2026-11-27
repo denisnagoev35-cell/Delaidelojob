@@ -709,7 +709,7 @@ def on_admin(con, msg, text):
         send(chat, "\n".join(lines))
     else:
         send(chat, "Команды: /podbor · /testrass · /rass · /reparse · /vac N · /mesto N Город · "
-                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest · /digest_pin N · /post · /oblozhki")
+                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest · /digest_pin N · /post · /ochered · /oblozhki")
 
 
 def pb_get(con, uid):
@@ -1218,7 +1218,8 @@ def main():
     allowed = ["message", "callback_query", "channel_post", "edited_channel_post"]
     while True:
         try:
-            updates = tg("getUpdates", offset=offset, timeout=50, allowed_updates=allowed)
+            # 25 с: запланированные посты выходят не позже чем через ~25 с после своей минуты
+            updates = tg("getUpdates", offset=offset, timeout=25, allowed_updates=allowed)
         except TgError as e:
             log.warning("getUpdates: %s", e)
             time.sleep(5)
@@ -1243,6 +1244,10 @@ def main():
             RM.tick(con)
         except Exception:
             log.exception("remind tick failed")
+        try:
+            PO.tick(con)
+        except Exception:
+            log.exception("posting tick failed")
         for upd in updates:
             offset = upd["update_id"] + 1
             try:

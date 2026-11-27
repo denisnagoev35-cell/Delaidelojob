@@ -297,7 +297,7 @@ def cover_kb(con, d):
 # ---------- превью и кнопки ----------
 
 def _kb(con, d):
-    return B.kb([[("✅ Опубликовать", "po:pub")],
+    return B.kb([[("✅ Опубликовать", "po:pub"), ("🕒 Запланировать", "po:sched")],
                  [("🔁 Переписать ещё", "po:redo"), ("✏️ Исправить", "po:edit")],
                  [(f"🖼 Обложка: {_cover_label(con, d)}"[:60], "po:cover")],
                  [("❌ Отмена", "po:cancel")]])
@@ -401,9 +401,43 @@ def callback(con, uid, chat, mid, data):
         B.send(chat, "🗑 Обложка удалена.")
         list_covers(con, chat)
         return
+    if act == "qlist":
+        _markup(chat, mid, None)
+        queue_list(con, chat)
+        return
+    if act in ("qone", "qtime", "qnow", "qdel"):
+        qid = int(parts[2])
+        if act == "qone":
+            queue_one(con, chat, qid)
+        elif act == "qtime":
+            ask_time(con, uid, chat, mid, f"q{qid}")
+        elif act == "qdel":
+            cur = con.execute("UPDATE post_queue SET status='deleted' WHERE id=? AND status='wait'", (qid,))
+            con.commit()
+            _markup(chat, mid, None)
+            B.send(chat, "🗑 Убрал из очереди." if cur.rowcount else "Этот пост уже вышел или удалён.")
+        elif act == "qnow":
+            r = con.execute("SELECT * FROM post_queue WHERE id=? AND status='wait'", (qid,)).fetchone()
+            _markup(chat, mid, None)
+            if not r:
+                B.send(chat, "Этот пост уже вышел или удалён.")
+            else:
+                _publish_q(con, r)
+        return
+    if act == "day":
+        _markup(chat, mid, time_kb(con, parts[2], int(parts[3])))
+        return
+    if act == "at":
+        _markup(chat, mid, None)
+        set_time(con, uid, chat, parts[2], int(parts[3]))
+        return
     d = _get(con, uid)
     if not d:
         B.send(chat, "Черновик не найден — перешли пост ещё раз.")
+        return
+    if act == "sched":
+        if _check_len(con, chat, d):
+            ask_time(con, uid, chat, mid, "d")
         return
     if act == "cancel":
         _set(con, uid, {})
@@ -422,6 +456,9 @@ def callback(con, uid, chat, mid, data):
     elif act == "cover":
         _markup(chat, mid, cover_kb(con, d))
     elif act == "back":
+        if d.get("wait") == "time":
+            d.pop("wait")
+            _set(con, uid, d)
         _markup(chat, mid, _kb(con, d))
     elif act == "cset":
         v = parts[2] if len(parts) > 2 else "none"
@@ -433,24 +470,15 @@ def callback(con, uid, chat, mid, data):
         publish(con, uid, chat, mid, d)
 
 
-def publish(con, uid, chat, mid, d):
-    text = d.get("text", "")
-    fid = _cover_file(con, d)
-    if len(text) > _limit(con, d):
-        B.send(chat, f"⚠️ {len(text)} знаков, лимит {_limit(con, d)}. Сократи через «✏️ Исправить» "
-                     "или убери обложку.")
-        return
-    try:
-        if fid:
-            m = B.tg("sendPhoto", chat_id=B.CHANNEL, photo=fid, caption=html.escape(text), parse_mode="HTML")
-        else:
-            m = B.tg("sendMessage", chat_id=B.CHANNEL, text=html.escape(text), parse_mode="HTML",
-                     disable_web_page_preview=True)
-    except B.TgError as e:
-        B.send(chat, f"❌ Не опубликовал: {html.escape(str(e))}")
-        return
-    _set(con, uid, {})
-    _markup(chat, mid, None)
+def _to_channel(text, fid):
+    if fid:
+        return B.tg("sendPhoto", chat_id=B.CHANNEL, photo=fid, caption=html.escape(text), parse_mode="HTML")
+    return B.tg("sendMessage", chat_id=B.CHANNEL, text=html.escape(text), parse_mode="HTML",
+                disable_web_page_preview=True)
+
+
+def _after(con, uid, m, note):
+    """Опубликовали: сохраняем, разбираем, рассылаем подписчикам, сообщаем обоим."""
     n = m["message_id"]
     B.event(con, uid, "post_pub", str(n))
     # свои посты бот апдейтом обычно не получает — сохраняем, разбираем и рассылаем сами
@@ -463,13 +491,243 @@ def publish(con, uid, chat, mid, d):
             B.notify_subscribers(con, n)
     except Exception:
         log.exception("posting: analyze %s", n)
-    B.send(chat, f"✅ Опубликовано: <a href=\"{B.post_link(n)}\">пост №{n}</a>")
-    for aid in B.ADMIN_IDS | POST_IDS:   # второму человеку — что пост вышел
-        if aid != uid:
+    link = f"<a href=\"{B.post_link(n)}\">пост №{n}</a>"
+    for aid in {uid} | B.ADMIN_IDS | POST_IDS:
+        try:
+            B.send(aid, (f"✅ {note}: {link}" if aid == uid else f"📣 {note} через бота: {link}"))
+        except B.TgError:
+            pass
+    return n
+
+
+def _check_len(con, chat, d):
+    if len(d.get("text", "")) > _limit(con, d):
+        B.send(chat, f"⚠️ {len(d['text'])} знаков, лимит {_limit(con, d)}. Сократи через «✏️ Исправить» "
+                     "или убери обложку.")
+        return False
+    return True
+
+
+def publish(con, uid, chat, mid, d):
+    if not _check_len(con, chat, d):
+        return
+    try:
+        m = _to_channel(d.get("text", ""), _cover_file(con, d))
+    except B.TgError as e:
+        B.send(chat, f"❌ Не опубликовал: {html.escape(str(e))}")
+        return
+    _set(con, uid, {})
+    _markup(chat, mid, None)
+    _after(con, uid, m, "Опубликовано")
+
+
+# ---------- отложенная публикация ----------
+# Telegram не даёт боту ставить посты в «отложенные» канала, поэтому очередь у бота: в нужную минуту он публикует сам.
+
+MSK = 3 * 3600
+SLOT_FROM, SLOT_TO = 9, 23        # кнопки времени: с 9:00 до 22:00 по часам
+SLOT_GAP = 20 * 60                # другой пост ближе 20 минут — слот помечаем занятым
+
+QUEUE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS post_queue(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, at INTEGER, text TEXT, file_id TEXT,
+  status TEXT DEFAULT 'wait', message_id INTEGER, created INTEGER, err TEXT);
+"""
+SCHEMA += QUEUE_SCHEMA
+
+
+def msk_ts(y, mo, d, h, mi):
+    """Время по Москве → unix."""
+    import calendar
+    return calendar.timegm((y, mo, d, h, mi, 0, 0, 0, 0)) - MSK
+
+
+def fmt_at(ts):
+    t, now = time.gmtime(ts + MSK), time.gmtime(time.time() + MSK)
+    day = ("сегодня" if t.tm_yday == now.tm_yday and t.tm_year == now.tm_year else
+           "завтра" if (ts + MSK) // 86400 - (time.time() + MSK) // 86400 == 1 else time.strftime("%d.%m", t))
+    return f"{day} в {time.strftime('%H:%M', t)}"
+
+
+def busy(con, ts, skip_id=None):
+    return con.execute("SELECT 1 FROM post_queue WHERE status='wait' AND ABS(at-?)<? AND id IS NOT ?",
+                       (ts, SLOT_GAP, skip_id)).fetchone() is not None
+
+
+def time_kb(con, target, day=0):
+    """target: 'd' — черновик, 'q<id>' — перенос поста из очереди. day: 0 сегодня, 1 завтра."""
+    now = time.time()
+    base = time.gmtime(now + MSK + day * 86400)
+    btns = []
+    for h in range(SLOT_FROM, SLOT_TO):
+        ts = msk_ts(base.tm_year, base.tm_mon, base.tm_mday, h, 0)
+        if ts < now + 120:
+            continue
+        btns.append((("🔸" if busy(con, ts, _qid(target)) else "") + f"{h}:00", f"po:at:{target}:{ts}"))
+    rows = [btns[i:i + 4] for i in range(0, len(btns), 4)]
+    rows.append([("📅 Завтра ▸", f"po:day:{target}:1") if day == 0 else ("◂ Сегодня", f"po:day:{target}:0")])
+    rows.append([("↩️ Назад", "po:back" if target == "d" else "po:qlist")])
+    return B.kb(rows)
+
+
+def _qid(target):
+    return int(target[1:]) if target.startswith("q") else None
+
+
+TIME_RE = re.compile(r"^\s*(?:(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\s+)?(\d{1,2})[:.](\d{2})\s*$")
+
+
+def parse_time(text):
+    """«15:30» (сегодня, если прошло — завтра), «28.11 15:30», «28.11.2026 9:05». → unix или None."""
+    m = TIME_RE.match(text or "")
+    if not m:
+        return None
+    dd, mm, yy, hh, mi = m.groups()
+    hh, mi = int(hh), int(mi)
+    if hh > 23 or mi > 59:
+        return None
+    now = time.gmtime(time.time() + MSK)
+    try:
+        if dd:
+            y = int(yy) + (2000 if yy and len(yy) == 2 else 0) if yy else now.tm_year
+            ts = msk_ts(y, int(mm), int(dd), hh, mi)
+            if not yy and ts < time.time() - 86400:
+                ts = msk_ts(y + 1, int(mm), int(dd), hh, mi)   # «05.01» в декабре — следующий год
+        else:
+            ts = msk_ts(now.tm_year, now.tm_mon, now.tm_mday, hh, mi)
+            if ts <= time.time():
+                ts += 86400
+    except (ValueError, OverflowError):
+        return None
+    return ts
+
+
+def ask_time(con, uid, chat, mid, target):
+    if target == "d":
+        d = _get(con, uid)
+        d["wait"] = "time"
+        _set(con, uid, d)
+    else:
+        _set_wait_q(con, uid, _qid(target))
+    _markup(chat, mid, time_kb(con, target))
+    B.send(chat, "🕒 Выбери время кнопкой (🔸 — рядом уже есть пост) или напиши: <code>15:30</code> "
+                 "или <code>28.11 15:30</code> (по Москве).")
+
+
+def _set_wait_q(con, uid, qid):
+    con.execute("INSERT INTO state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (f"postq:{uid}", str(qid)))
+    con.commit()
+
+
+def _pop_wait_q(con, uid):
+    r = con.execute("SELECT value FROM state WHERE key=?", (f"postq:{uid}",)).fetchone()
+    con.execute("DELETE FROM state WHERE key=?", (f"postq:{uid}",))
+    con.commit()
+    return int(r["value"]) if r else None
+
+
+def set_time(con, uid, chat, target, ts):
+    if ts < time.time() + 60:
+        B.send(chat, "Это время уже прошло — выбери другое.")
+        return
+    if ts > time.time() + 30 * 86400:
+        B.send(chat, "Дальше 30 дней не планирую — выбери время поближе.")
+        return
+    warn = "\n⚠️ Рядом (±20 мин) уже стоит пост — проверь /ochered." if busy(con, ts, _qid(target)) else ""
+    if target == "d":
+        d = _get(con, uid)
+        if not d:
+            B.send(chat, "Черновик не найден — перешли пост ещё раз.")
+            return
+        if not _check_len(con, chat, d):
+            return
+        con.execute("INSERT INTO post_queue(uid, at, text, file_id, created) VALUES(?,?,?,?,?)",
+                    (uid, ts, d["text"], _cover_file(con, d), int(time.time())))
+        _set(con, uid, {})
+        B.event(con, uid, "post_sched", str(ts))
+        B.send(chat, f"🕒 Запланировано на <b>{fmt_at(ts)}</b>.{warn}\nВся очередь: /ochered")
+    else:
+        qid = _qid(target)
+        cur = con.execute("UPDATE post_queue SET at=? WHERE id=? AND status='wait'", (ts, qid))
+        con.commit()
+        B.send(chat, (f"🕒 Перенёс на <b>{fmt_at(ts)}</b>.{warn}" if cur.rowcount
+                      else "Этот пост уже вышел или удалён."))
+        _pop_wait_q(con, uid)
+
+
+def queue_list(con, chat):
+    rows = con.execute("SELECT * FROM post_queue WHERE status='wait' ORDER BY at").fetchall()
+    if not rows:
+        B.send(chat, "🕒 Очередь пуста.")
+        return
+    lines = [f"🕒 <b>Запланировано: {len(rows)}</b>"]
+    btns = []
+    for r in rows[:30]:
+        first = next((l for l in r["text"].splitlines() if l.strip() and not l.startswith("#")), "")[:45]
+        lines.append(f"• <b>{fmt_at(r['at'])}</b>{' 🖼' if r['file_id'] else ''} — {html.escape(first)}")
+        btns.append([(f"{time.strftime('%d.%m %H:%M', time.gmtime(r['at'] + MSK))} ⚙️", f"po:qone:{r['id']}")])
+    B.send(chat, "\n".join(lines), B.kb(btns))
+
+
+def queue_one(con, chat, qid):
+    r = con.execute("SELECT * FROM post_queue WHERE id=?", (qid,)).fetchone()
+    if not r or r["status"] != "wait":
+        B.send(chat, "Этот пост уже вышел или удалён.")
+        return
+    kbd = B.kb([[("🕒 Другое время", f"po:qtime:{qid}"), ("▶️ Сейчас", f"po:qnow:{qid}")],
+                [("🗑 Убрать из очереди", f"po:qdel:{qid}")], [("↩️ К очереди", "po:qlist")]])
+    head = f"🕒 <b>{fmt_at(r['at'])}</b>\n\n"
+    if r["file_id"] and len(head) + len(r["text"]) <= CAPTION_MAX:
+        try:
+            B.tg("sendPhoto", chat_id=chat, photo=r["file_id"], caption=head + html.escape(r["text"]),
+                 parse_mode="HTML", reply_markup=kbd)
+            return
+        except B.TgError:
+            pass
+    B.send(chat, head + html.escape(r["text"]), kbd)
+
+
+def _publish_q(con, r):
+    try:
+        m = _to_channel(r["text"], r["file_id"])
+    except B.TgError as e:
+        con.execute("UPDATE post_queue SET status='error', err=? WHERE id=?", (str(e)[:300], r["id"]))
+        con.commit()
+        for aid in {r["uid"]} | B.ADMIN_IDS:
             try:
-                B.send(aid, f"📣 Опубликован <a href=\"{B.post_link(n)}\">пост №{n}</a> через бота.")
+                B.send(aid, f"❌ Запланированный пост ({fmt_at(r['at'])}) не вышел: {html.escape(str(e))}\n"
+                            f"Текст:\n{html.escape(r['text'][:1500])}")
             except B.TgError:
                 pass
+        return None
+    con.execute("UPDATE post_queue SET status='done', message_id=? WHERE id=?", (m["message_id"], r["id"]))
+    con.commit()
+    return _after(con, r["uid"], m, "Вышел запланированный")
+
+
+def tick(con):
+    """Каждый проход цикла: публикуем всё, чему пришло время (по одному, чтобы не залпом)."""
+    if not enabled():
+        return
+    rows = con.execute("SELECT * FROM post_queue WHERE status='wait' AND at<=? ORDER BY at LIMIT 3",
+                       (int(time.time()),)).fetchall()
+    for r in rows:
+        if time.time() - r["at"] > 6 * 3600:   # бот лежал больше 6 часов — не публикуем вслепую
+            con.execute("UPDATE post_queue SET status='late' WHERE id=?", (r["id"],))
+            con.commit()
+            for aid in {r["uid"]} | B.ADMIN_IDS:
+                try:
+                    B.send(aid, f"⚠️ Пост на {fmt_at(r['at'])} не вышел вовремя (бот был недоступен). "
+                                f"Текст:\n{html.escape(r['text'][:1500])}")
+                except B.TgError:
+                    pass
+            continue
+        _publish_q(con, r)
+
+
+def _has_wait_q(con, uid):
+    return con.execute("SELECT 1 FROM state WHERE key=?", (f"postq:{uid}",)).fetchone() is not None
 
 
 def is_own(con, message_id):
@@ -480,7 +738,9 @@ def is_own(con, message_id):
 HELP = ("📝 <b>Посты через бота</b>\n\n"
         "Перешли сюда вакансию (или вставь текст) — бот перепишет её своими словами в формате канала: "
         "хэштеги, текст, контакты для отклика, подвал. Дальше кнопки: опубликовать, переписать ещё, "
-        "исправить вручную, выбрать обложку. В канал уходит только по кнопке «✅ Опубликовать».\n\n"
+        "исправить вручную, выбрать обложку. В канал уходит только по кнопке «✅ Опубликовать» "
+        "или в назначенное время через «🕒 Запланировать».\n\n"
+        "🕒 <code>/ochered</code> — запланированные посты: посмотреть, перенести, выпустить сейчас, убрать.\n\n"
         "🖼 Обложки: пришли картинку с подписью <code>/oblozhka Кальянщик тёмная</code> — добавится в список "
         "(если в названии есть профессия, для её вакансий будет предлагаться первой). "
         "<code>/oblozhki</code> — список и удаление.")
@@ -499,10 +759,16 @@ def on_message(con, msg):
         list_covers(con, chat)
     elif cmd == "/post":
         B.send(chat, HELP)
+    elif cmd == "/ochered":
+        queue_list(con, chat)
     elif cmd:
         return False
     elif waiting_edit(con, uid) and msg.get("text"):
         on_edit_text(con, msg)
+    elif msg.get("text") and parse_time(msg["text"]) and (_get(con, uid).get("wait") == "time" or
+                                                          _has_wait_q(con, uid)):
+        q = _pop_wait_q(con, uid)
+        set_time(con, uid, chat, f"q{q}" if q else "d", parse_time(msg["text"]))
     else:
         return start(con, msg)
     return True

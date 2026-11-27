@@ -373,7 +373,7 @@ def highlights(g, pos):
     pays = " ".join(_s(p.get("pay"), 400) + " " + _s(p.get("schedule"), 400) for p in pos)
     out = []
     for x in _list(g.get("highlight"), 3, 34):
-        if "₽" in x or re.search(r"\d\s*/\s*\d|\d{1,2}:\d{2}|смен", x, re.I) or _dup(x, pays) or \
+        if "₽" in x or re.search(r"\d\s*/\s*\d|\d{1,2}:\d{2}|^\W*(?:график|смены?\b)|за\s+смену", x, re.I) or _dup(x, pays) or \
                 any(_dup(x, y) for y in out):
             continue
         if len(" · ".join(out + [x])) > 50:
@@ -833,6 +833,11 @@ def checks(d, con=None):
     if bad and d.get("by") == "gpt":
         out.append("⚠️ В заголовке есть числа, которых нет в исходнике: " + ", ".join(f"{n:,}".replace(",", " ")
                                                                                  for n in bad) + " — проверь ставку.")
+    if d.get("by") == "gpt":
+        cut = cut_words(html.unescape(re.sub(r"<[^>]+>", " ", d.get("text", ""))), d.get("src", ""))
+        if cut:
+            out.append("⚠️ Похоже, обрезано слово: " + ", ".join(f"«{a}» (в исходнике «{b}»)" for a, b in
+                                                               sorted(cut.items())[:4]) + " — поправь через «✏️ Исправить».")
     if not d.get("contacts"):
         out.append("⚠️ Контакт для отклика не нашёл — добавь через «✏️ Исправить».")
     if d.get("by") == "gpt" and d.get("no_place"):
@@ -915,6 +920,39 @@ def ensure_noexp(g, src):
     return g
 
 
+WORD_RE = re.compile(r"[А-Яа-яЁё]{4,}")
+
+
+def cut_words(text, src):
+    """Слова, которые нейросеть обрезала: «Красива форма» при «Красивая форма» в исходнике → {«красива»: «красивая»}.
+    Только если в исходнике есть та же пара слов с полным словом (падежи вроде «администратор/а» не трогаем)."""
+    low = re.sub(r"\s+", " ", (src or "").lower())
+    have = set(re.findall(r"[а-яё]{4,}", low))
+    toks = re.findall(r"[а-яё]+", (text or "").lower())
+    out = {}
+    for i, w in enumerate(toks):
+        if len(w) < 4 or w in have:
+            continue
+        # обрезка — одна потерянная гласная/й/ь в конце («красива(я)»); «работа/работать» — это пересказ, не трогаем
+        for h in (h for h in have if h.startswith(w) and len(h) == len(w) + 1 and h[-1] in "аяеёиийоуюыьэ"):
+            nxt = toks[i + 1] if i + 1 < len(toks) else ""
+            prv = toks[i - 1] if i else ""
+            if (nxt and f"{h} {nxt}" in low and f"{w} {nxt}" not in low) or \
+                    (prv and f"{prv} {h}" in low and f"{prv} {w}" not in low):
+                out[w] = h
+                break
+    return out
+
+
+def mend(x, src):
+    """Восстанавливает обрезанные слова по исходнику (регистр первой буквы сохраняем)."""
+    fix = cut_words(x, src)
+    def sub(m):
+        w = m.group(0); f = fix.get(w.lower())
+        return (f[:1].upper() + f[1:] if w[:1].isupper() else f) if f else w
+    return WORD_RE.sub(sub, x) if fix else x
+
+
 def fix_highlight(g, src):
     """Фишка про опыт — ровной фразой и только если это есть в исходнике («опыт научим» → «научим с нуля»)."""
     hl = g.get("highlight") if isinstance(g.get("highlight"), list) else []
@@ -923,7 +961,7 @@ def fix_highlight(g, src):
         if isinstance(x, str) and HAS_NOEXP_RE.search(x):
             x = "научим с нуля" if TEACH_RE.search(src) else ("можно без опыта" if NOEXP_RE.search(src) else None)
         if x:
-            out.append(x)
+            out.append(mend(x, src))
     g["highlight"] = out
     return g
 

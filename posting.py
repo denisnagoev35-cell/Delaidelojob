@@ -158,9 +158,14 @@ GPT_SYSTEM = (
     '   {"title": "Кальянный мастер" — должность с большой буквы, без «требуется»,\n'
     '    "pay": "2 000 ₽ за смену + 10% + чай" — коротко, только деньги, или null,\n'
     '    "schedule": "2/2, 3/3 · 13:00–02:00, пт–сб до 04:00" или null,\n'
-    '    "details": ["до 4 пунктов: доход в месяц, такси, кого ждём, что делать — каждый до 80 знаков"]}],\n'
-    ' "perks": ["до 4 общих плюсов: выплаты раз в 2 недели, скидка 40% на меню, обучение — до 60 знаков"],\n'
-    ' "contact_note": "как откликаться БЕЗ номеров и ников: мессенджеры, имя, пометка" или null}\n'
+    '    "details": ["до 6 пунктов, каждый до 80 знаков: доход в месяц, что делать (все обязанности кратко), '
+    'кого ждём (возраст, опыт, качества) — график сюда НЕ повторяй"]}],\n'
+    ' "perks": ["до 4 общих плюсов, только те, что есть в тексте: такси, выплаты раз в 2 недели, скидки, обучение '
+    '— до 60 знаков"],\n'
+    ' "contact_note": "как откликаться БЕЗ номеров и ников: что прислать (о себе, опыт, фото), мессенджер, имя, '
+    'пометка — если в тексте это есть" или null}\n'
+    "Никогда не пиши «не указано», «нет данных» и т. п. — чего нет в тексте, того просто нет. "
+
     "Пиши числа с пробелом в тысячах (2 000), «₽» вместо «рублей». Без эмодзи, без markdown, без контактов, "
     "ссылок, хэштегов и названий других каналов."
 )
@@ -213,10 +218,27 @@ def _s(v, limit=120):
     return v[:limit].rstrip() if v.lower() not in ("null", "none", "нет") else ""
 
 
+EMPTY_RE = re.compile(r"не\s+(?:указан|уточн|сказан|оговор)|нет\s+данных|неизвестн", re.I)
+
+
+def _words(x):
+    return {w for w in re.findall(r"[а-яёa-z0-9]{3,}", (x or "").lower())}
+
+
+def _dup(a, b):
+    """Пункт почти повторяет другой (график и «График плавающий…»)."""
+    wa, wb = _words(a), _words(b)
+    return bool(wa and wb) and len(wa & wb) / min(len(wa), len(wb)) >= 0.6
+
+
+def _cap(x):
+    return x[:1].upper() + x[1:] if x else x
+
+
 def _list(v, n, limit):
     items = (_s(re.sub(r"(?<![\w.])@\w+", "", i) if isinstance(i, str) else i, limit)
              for i in (v if isinstance(v, list) else []))
-    return [x for x in items if x and not _call_only(x)][:n]
+    return [x for x in items if x and not _call_only(x) and not EMPTY_RE.search(x)][:n]
 
 
 def render(g, tags, conts, cut=0):
@@ -230,6 +252,7 @@ def render(g, tags, conts, cut=0):
         prof = PB.find_prof(title, [], B.PROF_TAGS)
         emo = PROF_EMOJI.get(prof, "💼")
         pay = _s(p.get("pay"), 70)
+        pay = "" if EMPTY_RE.search(pay) else pay
         lines.append(f"<b>{emo} {e(title)}{' — ' + e(pay) if pay else ''}</b>")
     where = " · ".join(x for x in (f"«{venue}»" if venue and not venue.startswith("«") else venue, place) if x)
     if where:
@@ -237,8 +260,10 @@ def render(g, tags, conts, cut=0):
     # подробности — в свёрнутом блоке
     blocks = []
     for p in pos:
-        det = _list(p.get("details"), 4, 90)
-        sch = _s(p.get("schedule"), 80)
+        sch = _cap(_s(p.get("schedule"), 80))
+        if EMPTY_RE.search(sch):
+            sch = ""
+        det = [x for x in _list(p.get("details"), 6 if len(pos) == 1 else 4, 90) if not _dup(x, sch)]
         head = (f"<b>{e(_s(p.get('title'), 60))}</b>" if len(pos) > 1 else "") + \
                (f"{' · ' if len(pos) > 1 else ''}🗓 {e(sch)}" if sch else "")
         blocks.append([head] if head else [])
@@ -254,7 +279,8 @@ def render(g, tags, conts, cut=0):
         body += ("\n\n" if body else "") + "✅ " + e(pk[:1].upper() + pk[1:])
     if body:
         lines += ["", f"<blockquote expandable>{body}</blockquote>"]
-    note = _s(g.get("contact_note"), 120)
+    note = _s(g.get("contact_note"), 140)
+    note = "" if EMPTY_RE.search(note) else note
     if conts or note:
         lines += ["", "📩 <b>Отклик:</b> " + e(", ".join(conts)) + (f" ({e(note)})" if conts and note else e(note))]
     lines += ["", e(FOOTER)]

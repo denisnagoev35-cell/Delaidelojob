@@ -123,12 +123,13 @@ def clean(text, skip=()):
 EXTRA_TAGS = [
     (r"помо[щш]ни\w*\s+(?:кал[ьл]ян\w*|км\b)|#пкм\b|\bпкм\b", "#пкм"),
     (r"универсал", "#универсал"),
+    (r"менеджер(?!у|ом|а\b)|управляющ", "#менеджер"),
 ]
 
 
 # должность → профессии (все, что есть в названии: «Бармен-бариста» → бармен и бариста)
 TITLE_WORDS = [
-    ("kalyan", r"кал[ьл]ян|\bкм\b"),
+    ("kalyan", r"кал[ьл]янщ|кал[ьл]ян+\w*\s+мастер|\bп?км\b"),   # не «кальянной» — это место, не должность
     ("bar", r"бармен|бартендер|миксолог"),
     ("barista", r"бариста"),
     ("waiter", r"официант|раннер"),
@@ -143,16 +144,18 @@ def title_tags(titles):
     """Хэштеги по названиям должностей от нейросети; порядок — как в названиях."""
     found = []
     for t in (titles or "").lower().splitlines():
+        if re.search(r"менеджер|управляющ", t):
+            continue   # «Управляющий кальянной» — только #менеджер
         hits = sorted((m.start(), k) for k, rx in TITLE_WORDS for m in [re.search(rx, t)] if m)
         for _, k in hits:
             if k not in found:
                 found.append(k)
-    return hashtags(titles or "", [B.PROF_TAGS[k] for k in found if k in B.PROF_TAGS])
+    return hashtags(titles or "", [B.PROF_TAGS[k] for k in found if k in B.PROF_TAGS], words=False)
 
 
-def hashtags(text, tags=()):
+def hashtags(text, tags=(), words=True):
     """Наши хэштеги: профессии (по хэштегам исходника и словам) + #км, #пкм, #универсал по должностям."""
-    profs = PB.find_profs(text, list(tags), B.PROF_TAGS) or []
+    profs = PB.find_profs(text, list(tags), B.PROF_TAGS, use_words=words) or []
     out = [B.PROF_TAGS[p] for p in profs if p in B.PROF_TAGS]
     # #км — кальянный мастер (не помощник): убираем «помощник кальянного мастера» и ищем мастера/кальянщика
     rest = re.sub(r"помо[щш]ни\w*\s+(?:кал[ьл]ян\w*(?:\s+мастер\w*)?|км\b)", " ", text or "", flags=re.I)

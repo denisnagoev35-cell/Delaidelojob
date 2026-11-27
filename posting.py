@@ -196,6 +196,9 @@ GPT_SYSTEM = (
     '«опыт не обязателен» / «научим с нуля»"]}],\n'
     ' "perks": ["до 4 общих плюсов, только те, что есть в тексте: такси, выплаты раз в 2 недели, скидки, обучение '
     '— до 60 знаков"],\n'
+    ' "highlight": ["1–2 самых цепляющих для соискателя плюса из текста, до 30 знаков каждый: «такси после '
+    'закрытия», «рост до кальянного мастера», «бесплатное питание», «научим с нуля», «высокие чаевые», «оформление '
+    'по ТК». НЕ ставка и НЕ график. Ничего особенного нет — пустой список []"],\n'
     ' "contact_note": "как откликаться БЕЗ номеров и ников: что прислать (о себе, опыт, фото), мессенджер, имя, '
     'пометка — если в тексте это есть" или null}\n'
     "Никогда не пиши «не указано», «нет данных» и т. п. — чего нет в тексте, того просто нет. "
@@ -318,22 +321,32 @@ def render(g, tags, conts, cut=0):
     where = " · ".join(x for x in (f"«{venue}»" if venue and not venue.startswith("«") else venue, place) if x)
     if where:
         lines.append(f"📍 {e(where)}")
+    hl = highlights(g, pos)
+    sch1 = _cap(_cut(_s(pos[0].get("schedule"), 400), 150)) if len(pos) == 1 else ""
+    sch1 = "" if EMPTY_RE.search(sch1) else sch1
+    if hl:          # строка-фишка — видна в ленте, без раскрытия
+        lines.append(f"⭐ {e(' · '.join(hl))}")
+    elif sch1:      # фишки нет — наверх поднимаем график (одна должность)
+        lines.append(f"🗓 {e(sch1)}")
     # подробности — в свёрнутом блоке
     blocks = []
     for p in pos:
         sch = _cap(_cut(_s(p.get("schedule"), 400), 150))
         if EMPTY_RE.search(sch):
             sch = ""
-        det = [x for x in _list(p.get("details"), 6 if len(pos) == 1 else 4, 90) if not _dup(x, sch)]
+        det = [x for x in _list(p.get("details"), 6 if len(pos) == 1 else 4, 90)
+               if not _dup(x, sch) and not _same(x, hl)]   # фишка уже над спойлером
         req = [x if re.match(r"[A-ZА-ЯЁ]{2}", x) else x[:1].lower() + x[1:] for x in _list(p.get("requirements"), 6, 70)]
+        if sch and not hl and len(pos) == 1:
+            sch = ""   # график уже стоит под адресом
         head = (f"<b>{e(_s(p.get('title'), 60))}</b>" if len(pos) > 1 else "") + \
                (f"{' · ' if len(pos) > 1 else ''}🗓 {e(sch)}" if sch else "")
         blocks.append([head] if head else [])
         blocks[-1] += [f"• {e(x)}" for x in det]
-        req = [x for x in req if not any(_dup(x, y) for y in det)]   # «работа с кальянами» и там и там
+        req = [x for x in req if not any(_dup(x, y) for y in det) and not _same(x, hl)]   # «работа с кальянами» и там и там
         if req:   # требования одной строкой; при нехватке места срезаются пункты «•», а не эта строка
             blocks[-1].append("👤 " + e(_cap(", ".join(req))))
-    perks = _list(g.get("perks"), 4, 70)
+    perks = [x for x in _list(g.get("perks"), 4, 70) if not _same(x, hl)]
     flat = [(bi, li) for bi, b in enumerate(blocks) for li in range(len(b)) if b[li].startswith("• ")]
     for bi, li in reversed(flat[len(flat) - cut:] if cut else []):
         blocks[bi][li] = None
@@ -352,6 +365,25 @@ def render(g, tags, conts, cut=0):
         lines += ["", "📩 <b>Отклик:</b> " + e(", ".join(conts)) + (f" ({e(note)})" if conts and note else e(note))]
     lines += ["", e(FOOTER)]
     return "\n".join(lines)
+
+
+def highlights(g, pos):
+    """Фишка: 1–2 коротких плюса от нейросети; без денег и графика, итог ≤ 50 знаков."""
+    pays = " ".join(_s(p.get("pay"), 400) + " " + _s(p.get("schedule"), 400) for p in pos)
+    out = []
+    for x in _list(g.get("highlight"), 3, 34):
+        if "₽" in x or re.search(r"\d\s*/\s*\d|\d{1,2}:\d{2}|смен", x, re.I) or _dup(x, pays) or \
+                any(_dup(x, y) for y in out):
+            continue
+        if len(" · ".join(out + [x])) > 50:
+            break
+        out.append(x.rstrip("…") if not out or re.match(r"[A-ZА-ЯЁ]{2}", x) else x[:1].lower() + x[1:].rstrip("…"))
+    return out[:2]
+
+
+def _same(x, hl):
+    """Пункт повторяет фишку: по словам или оба про «без опыта / научим»."""
+    return any(_dup(x, y) or (HAS_NOEXP_RE.search(x) and HAS_NOEXP_RE.search(y)) for y in hl)
 
 
 def plain_len(h):
@@ -761,7 +793,7 @@ def _rewrite(con, uid, d):
     _set(con, uid, d)
 
 
-PATCH_RE = re.compile(r"^\s*(?P<k>адрес|место|📍|метро|м\.|ставка|оплата|зп|💰|график|🗓|отклик|контакт\w*|📩)\s*[:—-]?\s*",
+PATCH_RE = re.compile(r"^\s*(?P<k>фишк\w*|⭐|адрес|место|📍|метро|м\.|ставка|оплата|зп|💰|график|🗓|отклик|контакт\w*|📩)\s*[:—-]?\s*",
                       re.I)
 
 
@@ -773,6 +805,8 @@ def apply_patch(h, msg_text):
     if not m or "\n" in t or len(t) > 250:
         return None, None
     key, val = m.group("k").lower(), t[m.end():].strip()
+    if (key.startswith("фишк") or key == "⭐") and re.fullmatch(r"\s*[-—]?\s*", t[m.end("k"):]):
+        val = "-"                                # «фишка -» — разделитель съел минус
     if key in ("м.", "метро"):
         val = t                                  # «м. Арбатская …» — целиком
     if not val:
@@ -781,6 +815,22 @@ def apply_patch(h, msg_text):
     lines = h.split("\n")
     heads = [i for i, l in enumerate(lines) if l.startswith("<b>") and not l.startswith("<b>Отклик")
              and " — " in l and "<blockquote" not in l]
+    if key.startswith("фишк") or key == "⭐":
+        i = next((i for i, l in enumerate(lines) if l.startswith("⭐ ")), None)
+        if val in ("-", "—", "убрать", "нет"):
+            if i is None:
+                return None, "фишки и так нет"
+            del lines[i]
+            return "\n".join(lines), "фишку (убрал)"
+        new = f"⭐ {_cap(e)}"
+        if i is not None:
+            lines[i] = new
+        else:
+            j = next((i for i, l in enumerate(lines) if l.startswith("📍 ")), heads[-1] if heads else None)
+            if j is None:
+                return None, "не нашёл, куда вставить фишку — пришли пост целиком"
+            lines.insert(j + 1, new)
+        return "\n".join(lines), "фишку"
     if key in ("адрес", "место", "📍", "метро", "м."):
         i = next((i for i, l in enumerate(lines) if l.startswith("📍 ")), None)
         if i is not None:
@@ -824,7 +874,8 @@ def apply_patch(h, msg_text):
     return "\n".join(lines), "отклик"
 
 
-PATCH_HELP = ("Не понял правку. Можно одной строкой: <code>адрес м. Арбатская, ул. Новый Арбат 21</code>, "
+PATCH_HELP = ("Не понял правку. Можно одной строкой: <code>фишка такси после закрытия</code> "
+              "(<code>фишка -</code> — убрать), <code>адрес м. Арбатская, ул. Новый Арбат 21</code>, "
               "<code>ставка 4 000 ₽ за смену + %</code>, <code>график 2/2 с 12:00</code>, "
               "<code>отклик @username</code> — или пришли пост целиком.")
 
@@ -835,7 +886,8 @@ def auto_format(plain):
     e = html.escape
     lines = plain.strip("\n").splitlines()
     heads = tuple(PROF_EMOJI.values()) + ("💼",)
-    q_start = next((i for i, l in enumerate(lines) if l.startswith(("🗓", "• ", "👤"))), None)
+    q_start = next((i for i, l in enumerate(lines) if l.startswith(("🗓", "• ", "👤"))
+                    and not (l.startswith("🗓") and i and lines[i - 1].strip())), None)   # 🗓 сразу под адресом — не спойлер
     q_end = next((i for i, l in enumerate(lines) if l.startswith(("📩", "📝"))), len(lines))
     out = []
     for i, l in enumerate(lines):
@@ -910,7 +962,7 @@ def callback(con, uid, chat, mid, data):
         elif act == "qedit":
             _qedit_set(con, uid, qid)
             B.send(chat, "Пришли исправленный пост целиком (зажми карточку → «Копировать», поправь, отправь; "
-                         "строку с временем можно не убирать) или одну строку: <code>адрес …</code>, "
+                         "строку с временем можно не убирать) или одну строку: <code>фишка …</code>, <code>адрес …</code>, "
                          "<code>ставка …</code>, <code>график …</code>, <code>отклик …</code>.")
         elif act == "qcov":
             _markup(chat, mid, queue_cover_kb(con, qid))
@@ -960,7 +1012,7 @@ def callback(con, uid, chat, mid, data):
         d["wait"] = "edit"
         _set(con, uid, d)
         B.send(chat, "Пришли исправленный пост целиком (зажми превью → «Копировать», поправь, отправь) "
-                     "или одну строку: <code>адрес …</code>, <code>ставка …</code>, <code>график …</code>, "
+                     "или одну строку: <code>фишка …</code>, <code>адрес …</code>, <code>ставка …</code>, <code>график …</code>, "
                      "<code>отклик …</code>.")
     elif act == "cover":
         _markup(chat, mid, cover_kb(con, d))

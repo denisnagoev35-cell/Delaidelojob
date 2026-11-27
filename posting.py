@@ -119,10 +119,21 @@ def clean(text, skip=()):
     return re.sub(r"\n{3,}", "\n\n", out).strip()
 
 
+# Дополнительные хэштеги канала по должностям (после хэштега профессии)
+EXTRA_TAGS = [
+    (r"помо[щш]ни\w*\s+(?:кал[ьл]ян\w*|км\b)|#пкм\b|\bпкм\b", "#пкм"),
+    (r"универсал", "#универсал"),
+]
+
+
 def hashtags(text, tags=()):
-    """Наши хэштеги профессий: по хэштегам исходника и словам в тексте (правилами, без нейросети)."""
+    """Наши хэштеги: профессии (по хэштегам исходника и словам) + #пкм, #универсал по должностям."""
     profs = PB.find_profs(text, list(tags), B.PROF_TAGS) or []
-    return [B.PROF_TAGS[p] for p in profs if p in B.PROF_TAGS]
+    out = [B.PROF_TAGS[p] for p in profs if p in B.PROF_TAGS]
+    for rx, tag in EXTRA_TAGS:
+        if tag not in out and re.search(rx, text or "", re.I):
+            out.append(tag)
+    return out
 
 
 # ---------- переписывание ----------
@@ -548,6 +559,8 @@ def _rewrite(con, uid, d):
     g = gpt_rewrite(base)
     d["by"] = "gpt" if g else "raw"
     if g:   # с запасом под обложку (1024): лишние подробности срезаются с конца
+        titles = "\n".join(_s(p.get("title")) for p in g.get("positions", []) if isinstance(p, dict))
+        d["tags"] = d["tags"] + [t for t in hashtags(titles) if t not in d["tags"]]
         d["text"] = render_fit(g, d["tags"], d["contacts"], CAPTION_MAX - 24)
     else:   # без нейросети — очищенный исходник без контактов (они уйдут строкой «Отклик»)
         d["text"] = build(tidy(PB.CONTACT_RE.sub("", base)), d["tags"], d["contacts"])

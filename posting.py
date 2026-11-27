@@ -550,6 +550,8 @@ def _cover_label(con, d):
     c = d.get("cover")
     if c == "src":
         return "фото из исходника"
+    if c == "gen":
+        return "🎨 своя"
     if c:
         r = con.execute("SELECT name FROM post_covers WHERE id=?", (c,)).fetchone()
         return r["name"] if r else "нет"
@@ -561,6 +563,8 @@ def _cover_file(con, d):
     c = d.get("cover")
     if c == "src":
         return d.get("photo")
+    if c == "gen":
+        return d.get("gen_fid")
     if c and con.execute("SELECT 1 FROM post_covers WHERE id=?", (c,)).fetchone():
         return f"cover:{c}"
     return None
@@ -568,9 +572,12 @@ def _cover_file(con, d):
 
 def _upload(chat, path, caption, markup):
     """sendPhoto файлом с диска (multipart), с подписью и кнопками."""
-    import uuid
     with open(path, "rb") as f:
-        data = f.read()
+        return _upload_bytes(chat, f.read(), caption, markup)
+
+
+def _upload_bytes(chat, data, caption, markup):
+    import uuid
     bd = "----ddpost" + uuid.uuid4().hex
     fields = {"chat_id": str(chat), "caption": caption, "parse_mode": "HTML"}
     if markup:
@@ -620,9 +627,59 @@ def cover_kb(con, d):
         mark = "✅ " if d.get("cover") == r["id"] else ("⭐ " if r["id"] == sug else "")
         rows.append((mark + r["name"], f"po:cset:{r['id']}"))
     out = [rows[i:i + 2] for i in range(0, len(rows), 2)]
+    out.append([(("✅ " if d.get("cover") == "gen" else "") + "🎨 Сгенерировать из фото", "po:gen")])
     out.append([(("✅ " if not d.get("cover") else "") + "🚫 Без обложки", "po:cset:none")])
     out.append([("↩️ К превью", "po:back")])
     return B.kb(out)
+
+
+# ---------- своя обложка: фото заведения + наше оформление (cover_gen.py, нужен Pillow) ----------
+
+def download(file_id):
+    """Файл из Telegram → bytes."""
+    path = B.tg("getFile", file_id=file_id)["file_path"]
+    c = B.FastHTTPS("api.telegram.org", timeout=60)
+    try:
+        c.request("GET", f"/file/bot{B.TOKEN}/{path}")
+        r = c.getresponse()
+        data = r.read()
+    finally:
+        c.close()
+    if r.status != 200:
+        raise B.TgError(f"getFile download: {r.status}")
+    return data
+
+
+def make_cover(con, uid, chat, photo_fid, quiet=False):
+    """Собирает обложку из фото и текста черновика, ставит её в черновик. True — получилось."""
+    d = _get(con, uid)
+    try:
+        import cover_gen as CG
+    except ImportError:
+        B.send(chat, "❌ На сервере нет Pillow: <code>apt install -y python3-pil</code>, потом перезапуск бота.")
+        return False
+    try:
+        jpg = CG.render(download(photo_fid), CG.from_post(d.get("text", "")))
+        m = _upload_bytes(chat, jpg, "", None)
+    except Exception as e:
+        log.exception("posting: cover gen")
+        B.send(chat, f"❌ Не получилось собрать обложку: {html.escape(str(e))[:200]}")
+        return False
+    try:   # служебное фото убираем — обложка будет в превью
+        B.tg("deleteMessage", chat_id=chat, message_id=m["message_id"])
+    except B.TgError:
+        pass
+    d.update(cover="gen", gen_fid=m["photo"][-1]["file_id"], gen_src=photo_fid)
+    d.pop("wait", None)
+    _set(con, uid, d)
+    return True
+
+
+def refresh_cover(con, uid, chat):
+    """Текст поменялся — своя обложка пересобирается из того же фото (ставка, фишка и т. п.)."""
+    d = _get(con, uid)
+    if d.get("cover") == "gen" and d.get("gen_src"):
+        make_cover(con, uid, chat, d["gen_src"])
 
 
 # ---------- превью и кнопки ----------
@@ -934,6 +991,7 @@ def on_edit_text(con, msg):
                 d["no_place"] = False
             _set(con, uid, d)
             B.send(msg["chat"]["id"], f"✏️ Поменял {what}.")
+            refresh_cover(con, uid, msg["chat"]["id"])
         else:
             _set(con, uid, d)
             B.send(msg["chat"]["id"], f"⚠️ Не поменял: {what}.")
@@ -949,6 +1007,7 @@ def on_edit_text(con, msg):
     d["by"] = "manual"
     d.pop("wait", None)
     _set(con, uid, d)
+    refresh_cover(con, uid, msg["chat"]["id"])
     preview(con, uid, msg["chat"]["id"])
 
 
@@ -1021,7 +1080,19 @@ def callback(con, uid, chat, mid, data):
         _markup(chat, mid, None)
         B.send(chat, "✍️ Переписываю ещё раз…")
         _rewrite(con, uid, d)
+        refresh_cover(con, uid, chat)
         preview(con, uid, chat)
+    elif act == "gen":
+        _markup(chat, mid, None)
+        if d.get("photo") and d.get("cover") != "gen":   # в исходнике было фото — сразу из него
+            if make_cover(con, uid, chat, d["photo"]):
+                B.send(chat, "🎨 Обложка из фото исходника. Нужна другая — «🖼 Обложка» → «🎨 Сгенерировать» и пришли фото.")
+            preview(con, uid, chat)
+        else:
+            d["wait"] = "gen"
+            _set(con, uid, d)
+            B.send(chat, "🎨 Пришли фото заведения — соберу обложку в нашем оформлении. "
+                         "Надписи берутся из поста (должность, ставка, адрес, фишка).")
     elif act == "edit":
         d["wait"] = "edit"
         _set(con, uid, d)
@@ -1419,6 +1490,10 @@ def on_message(con, msg):
         return False
     elif msg.get("text") and _qedit_get(con, uid) and not (msg.get("forward_origin") or msg.get("forward_from_chat")):
         queue_edit_text(con, msg, _qedit_get(con, uid))
+    elif msg.get("photo") and _get(con, uid).get("wait") == "gen":
+        B.send(chat, "🎨 Собираю обложку…")
+        make_cover(con, uid, chat, msg["photo"][-1]["file_id"])
+        preview(con, uid, chat)
     elif waiting_edit(con, uid) and msg.get("text"):
         on_edit_text(con, msg)
     elif msg.get("text") and parse_time(msg["text"]) and (_get(con, uid).get("wait") == "time" or

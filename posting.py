@@ -817,10 +817,19 @@ def callback(con, uid, chat, mid, data):
         _markup(chat, mid, None)
         queue_list(con, chat)
         return
-    if act in ("qone", "qtime", "qnow", "qdel"):
+    if act in ("qone", "qtime", "qnow", "qdel", "qedit", "qcov", "qcset"):
         qid = int(parts[2])
         if act == "qone":
             queue_one(con, chat, qid)
+        elif act == "qedit":
+            _qedit_set(con, uid, qid)
+            B.send(chat, "Пришли исправленный текст поста целиком (скопируй из карточки выше и поправь). "
+                         "Строку с временем можно не убирать.")
+        elif act == "qcov":
+            _markup(chat, mid, queue_cover_kb(con, qid))
+        elif act == "qcset":
+            _markup(chat, mid, None)
+            queue_set_cover(con, chat, qid, parts[3])
         elif act == "qtime":
             ask_time(con, uid, chat, mid, f"q{qid}")
         elif act == "qdel":
@@ -1088,7 +1097,8 @@ def queue_one(con, chat, qid):
     if not r or r["status"] != "wait":
         B.send(chat, "Этот пост уже вышел или удалён.")
         return
-    kbd = B.kb([[("🕒 Другое время", f"po:qtime:{qid}"), ("▶️ Сейчас", f"po:qnow:{qid}")],
+    kbd = B.kb([[("✏️ Исправить текст", f"po:qedit:{qid}"), ("🖼 Обложка", f"po:qcov:{qid}")],
+                [("🕒 Другое время", f"po:qtime:{qid}"), ("▶️ Сейчас", f"po:qnow:{qid}")],
                 [("🗑 Убрать из очереди", f"po:qdel:{qid}")], [("↩️ К очереди", "po:qlist")]])
     head = f"🕒 <b>{fmt_at(r['at'])}</b>\n\n"
     if r["file_id"] and plain_len(head) + plain_len(r["text"]) <= CAPTION_MAX:
@@ -1098,6 +1108,76 @@ def queue_one(con, chat, qid):
         except B.TgError:
             pass
     B.send(chat, head + r["text"], kbd)
+
+
+def queue_cover_kb(con, qid):
+    """Выбор обложки для поста в очереди."""
+    r = con.execute("SELECT * FROM post_queue WHERE id=?", (qid,)).fetchone()
+    cur = (r["file_id"] or "") if r else ""
+    btns = [(("✅ " if cur == f"cover:{c['id']}" else "") + c["name"], f"po:qcset:{qid}:{c['id']}") for c in covers(con)]
+    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    rows.append([(("✅ " if not cur else "") + "🚫 Без обложки", f"po:qcset:{qid}:none")])
+    rows.append([("↩️ Назад", f"po:qone:{qid}")])
+    return B.kb(rows)
+
+
+def queue_set_cover(con, chat, qid, v):
+    r = con.execute("SELECT * FROM post_queue WHERE id=? AND status='wait'", (qid,)).fetchone()
+    if not r:
+        B.send(chat, "Этот пост уже вышел или удалён.")
+        return
+    ref = None if v == "none" else f"cover:{int(v)}"
+    if ref and plain_len(r["text"]) > CAPTION_MAX:
+        B.send(chat, f"⚠️ Текст {plain_len(r['text'])} знаков — с обложкой можно до {CAPTION_MAX}. "
+                     "Сначала сократи через «✏️ Исправить текст».")
+        return
+    con.execute("UPDATE post_queue SET file_id=? WHERE id=?", (ref, qid))
+    con.commit()
+    queue_one(con, chat, qid)
+
+
+def _qedit_get(con, uid):
+    r = con.execute("SELECT value FROM state WHERE key=?", (f"postqe:{uid}",)).fetchone()
+    return int(r["value"]) if r else None
+
+
+def _qedit_set(con, uid, qid):
+    if qid is None:
+        con.execute("DELETE FROM state WHERE key=?", (f"postqe:{uid}",))
+    else:
+        con.execute("INSERT INTO state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (f"postqe:{uid}", str(qid)))
+    con.commit()
+
+
+def queue_edit_text(con, msg, qid):
+    """Новый текст для поста в очереди (строку «🕒 …» из карточки, если скопировали, убираем)."""
+    uid, chat = msg["from"]["id"], msg["chat"]["id"]
+    _qedit_set(con, uid, None)
+    r = con.execute("SELECT * FROM post_queue WHERE id=? AND status='wait'", (qid,)).fetchone()
+    if not r:
+        B.send(chat, "Этот пост уже вышел или удалён — правка не сохранена.")
+        return
+    raw, ents = msg.get("text") or "", msg.get("entities") or []
+    first = raw.split("\n", 1)[0]
+    if first.startswith("🕒"):   # убираем строку с временем и пустую строку после неё, сдвигаем форматирование
+        cut = len(first) + 1
+        while raw[cut:cut + 1] == "\n":
+            cut += 1
+        shift = len(raw[:cut].encode("utf-16-le")) // 2
+        raw = raw[cut:]
+        ents = [dict(e, offset=e["offset"] - shift) for e in ents if e["offset"] >= shift]
+    fmt = [x for x in ents if x.get("type") not in ("url", "mention", "hashtag", "phone_number", "email")]
+    text = (entities_html(raw, ents) if fmt else auto_format(raw)).strip()
+    limit = CAPTION_MAX if r["file_id"] else TEXT_MAX
+    if plain_len(text) > limit:
+        B.send(chat, f"⚠️ {plain_len(text)} знаков, лимит {limit}" + (" с обложкой" if r["file_id"] else "") +
+               ". Не сохранил — сократи и пришли ещё раз (снова нажми «✏️ Исправить текст»).")
+        return
+    con.execute("UPDATE post_queue SET text=? WHERE id=?", (text, qid))
+    con.commit()
+    B.send(chat, "✏️ Сохранил. Так пост выйдет:")
+    queue_one(con, chat, qid)
 
 
 def _publish_q(con, r):
@@ -1169,6 +1249,8 @@ def on_message(con, msg):
         queue_list(con, chat)
     elif cmd:
         return False
+    elif msg.get("text") and _qedit_get(con, uid) and not (msg.get("forward_origin") or msg.get("forward_from_chat")):
+        queue_edit_text(con, msg, _qedit_get(con, uid))
     elif waiting_edit(con, uid) and msg.get("text"):
         on_edit_text(con, msg)
     elif msg.get("text") and parse_time(msg["text"]) and (_get(con, uid).get("wait") == "time" or

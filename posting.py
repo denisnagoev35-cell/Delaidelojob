@@ -1579,11 +1579,7 @@ def on_message(con, msg):
     elif cmd == "/ochered":
         queue_list(con, chat)
     elif cmd == "/zp_post":
-        if uid in B.ADMIN_IDS:
-            zp_post(con, uid, chat)
-        else:   # помощник: индекс уходит Денису на проверку, публикует он
-            index_to_admins(con, "📊 Индекс зарплат (запросил помощник) — проверь и опубликуй.")
-            B.send(chat, "📊 Индекс собран и отправлен Денису на проверку.")
+        zp_post(con, uid, chat)
     elif cmd:
         return False
     elif msg.get("text") and _qedit_get(con, uid) and not (msg.get("forward_origin") or msg.get("forward_from_chat")):

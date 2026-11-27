@@ -303,6 +303,7 @@ def render(g, tags, conts, cut=0):
                (f"{' · ' if len(pos) > 1 else ''}🗓 {e(sch)}" if sch else "")
         blocks.append([head] if head else [])
         blocks[-1] += [f"• {e(x)}" for x in det]
+        req = [x for x in req if not any(_dup(x, y) for y in det)]   # «работа с кальянами» и там и там
         if req:   # требования одной строкой; при нехватке места срезаются пункты «•», а не эта строка
             blocks[-1].append("👤 " + e(_cap(", ".join(req))))
     perks = _list(g.get("perks"), 4, 70)
@@ -684,7 +685,10 @@ def _rewrite(con, uid, d):
     d["by"] = "gpt" if g else "raw"
     if g:   # с запасом под обложку (1024): лишние подробности срезаются с конца
         titles = "\n".join(_s(p.get("title")) for p in g.get("positions", []) if isinstance(p, dict))
-        d["tags"] = d["tags"] + [t for t in hashtags(titles) if t not in d["tags"]]
+        # хэштеги — по названиям должностей (в тексте уборщицы есть «чистка кальянов» — это не #км);
+        # #пкм/#универсал из исходника добавляем, только если такая должность есть
+        own = hashtags(titles)
+        d["tags"] = own or d["tags"]
         d["text"] = render_fit(g, d["tags"], d["contacts"], CAPTION_MAX - 24)
     else:   # без нейросети — очищенный исходник без контактов (они уйдут строкой «Отклик»)
         d["text"] = build(tidy(PB.CONTACT_RE.sub("", base)), d["tags"], d["contacts"])

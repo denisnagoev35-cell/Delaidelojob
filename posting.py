@@ -137,6 +137,10 @@ def hashtags(text, tags=()):
     for rx, tag in EXTRA_TAGS:
         if tag not in out and re.search(rx, text or "", re.I):
             out.append(tag)
+    # администратор: #администратор вместо #хостес (подборка понимает оба), если хостес не упомянута отдельно
+    if "#хостес" in out and re.search(r"администратор|\bадмин\b", text or "", re.I) \
+            and not re.search(r"хост[еэ]с", text or "", re.I):
+        out[out.index("#хостес")] = "#администратор"
     # #кальянщик в канале не ставим: кальянные вакансии — #км / #пкм (подборка понимает их как кальянщика)
     if "#кальянщик" in out:
         out.remove("#кальянщик")
@@ -307,7 +311,7 @@ def render(g, tags, conts, cut=0):
     perks = perks[:max(0, len(perks) - max(0, cut - len(flat)))]
     body = "\n\n".join("\n".join(x for x in b if x) for b in blocks if any(b))
     if perks:
-        pk = "; ".join(perks)
+        pk = "; ".join(x if x[:2].isupper() else x[:1].lower() + x[1:] for x in perks)
         body += ("\n\n" if body else "") + "✅ " + e(pk[:1].upper() + pk[1:])
     if body:
         lines += ["", f"<blockquote expandable>{body}</blockquote>"]
@@ -602,8 +606,8 @@ def preview(con, uid, chat):
     if plain_len(text) > _limit(con, d):
         notes.append(f"⚠️ {plain_len(text)} знаков, лимит {_limit(con, d)}"
                      + (" для поста с обложкой" if _cover_file(con, d) else "") + " — сократи («✏️ Исправить»).")
-    head = "👀 <b>Превью</b>" + (f" (из «{html.escape(d['src_title'])}»)" if d.get("src_title") else "")
-    B.send(chat, "\n".join([head] + notes))
+    if notes:   # отдельной строкой только предупреждения; сам пост — следующим сообщением
+        B.send(chat, "\n".join(notes))
     fid = _cover_file(con, d)
     if fid and plain_len(text) <= CAPTION_MAX:
         try:

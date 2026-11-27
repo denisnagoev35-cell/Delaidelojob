@@ -215,8 +215,7 @@ POST_IDS = {int(x) for x in os.environ.get("POST_IDS", "703473452").replace(" ",
 
 
 # ---------- обложки ----------
-# Встроенные обложки — папка covers/ (ставятся сами по профессии). Свои — картинка с подписью
-# «/oblozhka Кальянщик тёмная» (хранится как file_id; профессия по названию — для неё своя важнее встроенной).
+# Обложки — только наши: папка covers/ и список BUILTIN ниже. Новая: файл в covers/ + строка в BUILTIN.
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS post_covers(
@@ -263,7 +262,7 @@ def seed(con):
 def pick_cover(con, text, prof):
     """Автовыбор: слово в начале вакансии (администратор, менеджер) → профессия → общая «Вакансия»."""
     seed(con)
-    rows = [r for r in con.execute("SELECT * FROM post_covers WHERE hidden=0 ORDER BY id")]
+    rows = [r for r in con.execute("SELECT * FROM post_covers WHERE hidden=0 AND path IS NOT NULL ORDER BY id")]
     head = "\n".join((text or "").splitlines()[:3]).lower()
     for r in rows:
         if r["kw"] and re.search(r["kw"], head, re.I):
@@ -271,7 +270,7 @@ def pick_cover(con, text, prof):
     if prof:
         own = [r for r in rows if r["prof"] == prof]
         if own:
-            return own[-1]["id"] if not own[-1]["path"] else own[0]["id"]   # своя загруженная — важнее встроенной
+            return own[0]["id"]
     gen = [r for r in rows if r["path"] == DEFAULT_COVER]
     return gen[0]["id"] if gen else None
 
@@ -283,35 +282,8 @@ def _prof_of(name):
 
 def covers(con, prof=None):
     seed(con)
-    rows = con.execute("SELECT * FROM post_covers WHERE hidden=0 ORDER BY id").fetchall()
+    rows = con.execute("SELECT * FROM post_covers WHERE hidden=0 AND path IS NOT NULL ORDER BY id").fetchall()
     return sorted(rows, key=lambda r: (r["prof"] != prof, r["id"])) if prof else list(rows)
-
-
-def add_cover(con, msg):
-    chat = msg["chat"]["id"]
-    photo = msg.get("photo") or []
-    name = re.sub(r"^/oblozhka(?:@\w+)?\s*", "", msg.get("caption") or msg.get("text") or "").strip()
-    if not photo:
-        B.send(chat, "Пришли картинку с подписью: <code>/oblozhka Кальянщик тёмная</code>")
-        return
-    if not name:
-        name = f"Обложка {int(time.time()) % 100000}"
-    con.execute("INSERT INTO post_covers(name, prof, file_id, added) VALUES(?,?,?,?)",
-                (name[:40], _prof_of(name), photo[-1]["file_id"], int(time.time())))
-    con.commit()
-    prof = _prof_of(name)
-    B.send(chat, f"🖼 Обложка «{html.escape(name[:40])}» добавлена"
-                 + (f" (профессия: {html.escape(B.PROF_NAMES[prof])})." if prof else ". Профессию по названию не понял — "
-                    "будет в общем списке."))
-
-
-def list_covers(con, chat):
-    rows = covers(con)
-    if not rows:
-        B.send(chat, "Обложек пока нет. Пришли картинку с подписью <code>/oblozhka Кальянщик тёмная</code>.")
-        return
-    B.send(chat, f"🖼 Обложек: {len(rows)}. Удалить — кнопкой.",
-           B.kb([[(f"🗑 {r['name']}", f"po:cdel:{r['id']}")] for r in rows[:40]]))
 
 
 def _cover_label(con, d):
@@ -388,8 +360,6 @@ def cover_kb(con, d):
         mark = "✅ " if d.get("cover") == r["id"] else ("⭐ " if r["id"] == sug else "")
         rows.append((mark + r["name"], f"po:cset:{r['id']}"))
     out = [rows[i:i + 2] for i in range(0, len(rows), 2)]
-    if d.get("photo"):
-        out.append([(("✅ " if d.get("cover") == "src" else "") + "📷 Фото из исходника", "po:cset:src")])
     out.append([(("✅ " if not d.get("cover") else "") + "🚫 Без обложки", "po:cset:none")])
     out.append([("↩️ К превью", "po:back")])
     return B.kb(out)
@@ -494,13 +464,6 @@ def callback(con, uid, chat, mid, data):
         return
     parts = data.split(":")
     act = parts[1] if len(parts) > 1 else ""
-    if act == "cdel":
-        con.execute("UPDATE post_covers SET hidden=1 WHERE id=? AND path IS NOT NULL", (int(parts[2]),))
-        con.execute("DELETE FROM post_covers WHERE id=? AND path IS NULL", (int(parts[2]),))
-        con.commit()
-        B.send(chat, "🗑 Обложка удалена.")
-        list_covers(con, chat)
-        return
     if act == "qlist":
         _markup(chat, mid, None)
         queue_list(con, chat)
@@ -562,7 +525,7 @@ def callback(con, uid, chat, mid, data):
         _markup(chat, mid, _kb(con, d))
     elif act == "cset":
         v = parts[2] if len(parts) > 2 else "none"
-        d["cover"] = None if v == "none" else ("src" if v == "src" else int(v))
+        d["cover"] = None if v == "none" or not v.isdigit() else int(v)
         _set(con, uid, d)
         _markup(chat, mid, None)
         preview(con, uid, chat)
@@ -840,9 +803,7 @@ HELP = ("📝 <b>Посты через бота</b>\n\n"
         "исправить вручную, выбрать обложку. В канал уходит только по кнопке «✅ Опубликовать» "
         "или в назначенное время через «🕒 Запланировать».\n\n"
         "🕒 <code>/ochered</code> — запланированные посты: посмотреть, перенести, выпустить сейчас, убрать.\n\n"
-        "🖼 Обложка: под превью кнопка «🖼 Обложки» — выбери из наших (подходящая отмечена ⭐), фото из исходника "
-        "или без обложки. Свою добавить — картинка с подписью <code>/oblozhka Название</code>. "
-        "<code>/oblozhki</code> — список и удаление.")
+        "🖼 «Обложки» — выбрать одну из наших (подходящая отмечена ⭐) или без обложки.")
 
 
 def on_message(con, msg):
@@ -852,11 +813,7 @@ def on_message(con, msg):
         return False
     text = (msg.get("text") or msg.get("caption") or "").strip()
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
-    if cmd == "/oblozhka":
-        add_cover(con, msg)
-    elif cmd == "/oblozhki":
-        list_covers(con, chat)
-    elif cmd == "/post":
+    if cmd == "/post":
         B.send(chat, HELP)
     elif cmd == "/ochered":
         queue_list(con, chat)

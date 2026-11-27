@@ -158,9 +158,10 @@ GPT_SYSTEM = (
     '   {"title": "Кальянный мастер" — должность с большой буквы, без «требуется»,\n'
     '    "pay": "2 000 ₽ за смену + 10% + чай" — коротко, только деньги, или null,\n'
     '    "schedule": "2/2, 3/3 · 13:00–02:00, пт–сб до 04:00" или null,\n'
-    '    "details": ["до 8 пунктов, КАЖДЫЙ — одна конкретная мысль из текста до 70 знаков: '
-    'каждая обязанность и каждое требование отдельным пунктом, средний доход — только если в тексте есть цифра; '
-    'без ярлыков вроде «обязанности:», без общих фраз; график сюда НЕ повторяй"]}],\n'
+    '    "details": ["обязанности и условия этой должности: до 6 пунктов, каждый — одна конкретная мысль до 70 '
+    'знаков; средний доход — только если в тексте есть цифра; без ярлыков и общих фраз; график НЕ повторяй"],\n'
+    '    "requirements": ["ВСЕ требования к кандидату из текста, коротко: «18+», «опыт от года», '
+    '«пунктуальность» — до 6 штук, до 40 знаков каждое"]}],\n'
     ' "perks": ["до 4 общих плюсов, только те, что есть в тексте: такси, выплаты раз в 2 недели, скидки, обучение '
     '— до 60 знаков"],\n'
     ' "contact_note": "как откликаться БЕЗ номеров и ников: что прислать (о себе, опыт, фото), мессенджер, имя, '
@@ -291,11 +292,14 @@ def render(g, tags, conts, cut=0):
         sch = _cap(_s(p.get("schedule"), 80))
         if EMPTY_RE.search(sch):
             sch = ""
-        det = [x for x in _list(p.get("details"), 8 if len(pos) == 1 else 4, 90) if not _dup(x, sch)]
+        det = [x for x in _list(p.get("details"), 6 if len(pos) == 1 else 4, 90) if not _dup(x, sch)]
+        req = [x[:1].lower() + x[1:] if not x[:2].isupper() else x for x in _list(p.get("requirements"), 6, 45)]
         head = (f"<b>{e(_s(p.get('title'), 60))}</b>" if len(pos) > 1 else "") + \
                (f"{' · ' if len(pos) > 1 else ''}🗓 {e(sch)}" if sch else "")
         blocks.append([head] if head else [])
         blocks[-1] += [f"• {e(x)}" for x in det]
+        if req:   # требования одной строкой; при нехватке места срезаются пункты «•», а не эта строка
+            blocks[-1].append("👤 " + e(_cap(", ".join(req))))
     perks = _list(g.get("perks"), 4, 70)
     flat = [(bi, li) for bi, b in enumerate(blocks) for li in range(len(b)) if b[li].startswith("• ")]
     for bi, li in reversed(flat[len(flat) - cut:] if cut else []):

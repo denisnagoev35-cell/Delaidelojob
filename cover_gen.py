@@ -48,17 +48,47 @@ def logo(s):
     return L.resize((s, s), Image.LANCZOS)
 
 
-def render(photo_bytes, f):
-    ph = Image.open(io.BytesIO(photo_bytes)).convert("RGBA")
-    s = max(W / ph.width, H / ph.height)
-    ph = ph.resize((int(ph.width * s + 1), int(ph.height * s + 1)), Image.LANCZOS)
-    im = ph.crop(((ph.width - W) // 2, (ph.height - H) // 2, (ph.width - W) // 2 + W, (ph.height - H) // 2 + H))
-    # затемнение: сверху чуть под логотип, снизу сильно под текст
+PH_BOTTOM = 600   # фото — сверху до этой линии; ниже тёмный низ под текст
+
+
+def _flat_border(ph):
+    """Однотонная рамка (логотип/картинка на сплошном фоне) → цвет фона, иначе None."""
+    sm = ph.convert("RGB").resize((64, 64))
+    px = [sm.getpixel((x, y)) for x in range(64) for y in (0, 1, 62, 63)] + \
+         [sm.getpixel((x, y)) for y in range(64) for x in (0, 1, 62, 63)]
+    avg = tuple(sum(c[i] for c in px) // len(px) for i in range(3))
+    dev = sum(max(abs(c[i] - avg[i]) for i in range(3)) for c in px) / len(px)
+    return avg if dev < 14 else None
+
+
+def background(ph):
+    """Фото в верхней части: обычное — заполняет верх (кадрируем), логотип на однотонном фоне — целиком, по центру.
+    Ниже PH_BOTTOM — плавный переход в чёрный, текст всегда на тёмном."""
+    flat = _flat_border(ph)
+    im = Image.new("RGBA", (W, H), (flat or BK) + (255,))
+    if flat:
+        box_w, box_h, top = W - 260, PH_BOTTOM - 210, 160
+        s = min(box_w / ph.width, box_h / ph.height)
+        p2 = ph.resize((max(1, int(ph.width * s)), max(1, int(ph.height * s))), Image.LANCZOS)
+        im.alpha_composite(p2, ((W - p2.width) // 2, top + (box_h - p2.height) // 2))
+    else:
+        area = PH_BOTTOM + 120
+        s = max(W / ph.width, area / ph.height)
+        p2 = ph.resize((int(ph.width * s + 1), int(ph.height * s + 1)), Image.LANCZOS)
+        y0 = max(0, int((p2.height - area) * 0.4))   # чуть выше центра — лица и вывески обычно там
+        x0 = (p2.width - W) // 2
+        im.alpha_composite(p2.crop((x0, y0, x0 + W, y0 + area)), (0, 0))
     g = Image.new("RGBA", (W, H)); gd = ImageDraw.Draw(g)
     for y in range(H):
-        a = max(int(170 * (1 - y / 220)) if y < 220 else 0, int(255 * min(0.93, max(0.0, (y - 330) / 520))))
-        gd.line((0, y, W, y), fill=BK + (a,))
-    im = Image.alpha_composite(im, g)
+        top_a = int(150 * (1 - y / 200)) if y < 200 else 0
+        low = 255 if y >= PH_BOTTOM + 120 else int(255 * max(0.0, (y - (PH_BOTTOM - 170)) / 290) ** 1.2)
+        gd.line((0, y, W, y), fill=BK + (max(top_a, min(255, low)),))
+    return Image.alpha_composite(im, g)
+
+
+def render(photo_bytes, f):
+    ph = Image.open(io.BytesIO(photo_bytes)).convert("RGBA")
+    im = background(ph)
     d = ImageDraw.Draw(im)
     L = 70
     # шапка

@@ -19,6 +19,7 @@ import urllib.parse
 import anketa as AN
 import digest as DG
 import podbor as PB
+import posting as PO
 import remind as RM
 import zp as ZP
 import texts as T
@@ -182,6 +183,7 @@ def db_connect(path=None):
     con.executescript(AN.SCHEMA)
     con.executescript(YM.SCHEMA)
     con.executescript(RM.SCHEMA)
+    con.executescript(PO.SCHEMA)
     con.commit()
     return con
 
@@ -471,6 +473,9 @@ def on_callback(con, cq):
         _answer(cq["id"])
         answered = True
 
+    if data.startswith("po:"):
+        PO.callback(con, uid, chat_id, mid, data)
+        return
     if data == "an:start":
         AN.start(con, uid, chat_id)
     elif data.startswith("an:req:"):
@@ -704,7 +709,7 @@ def on_admin(con, msg, text):
         send(chat, "\n".join(lines))
     else:
         send(chat, "Команды: /podbor · /testrass · /rass · /reparse · /vac N · /mesto N Город · "
-                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest · /digest_pin N")
+                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest · /digest_pin N · /post · /oblozhki")
 
 
 def pb_get(con, uid):
@@ -1152,7 +1157,8 @@ def handle(con, upd):
                 warn_no_text(post)
             try:
                 fields = analyze_post(con, post["message_id"], notify=True)
-                if fields and "channel_post" in upd:  # только новые посты, не правки
+                if fields and "channel_post" in upd and not PO.is_own(con, post["message_id"]):
+                    # только новые посты, не правки; опубликованные ботом уже разосланы
                     notify_subscribers(con, post["message_id"])
             except Exception:
                 log.exception("analyze_post %s failed", post.get("message_id"))
@@ -1170,6 +1176,8 @@ def handle(con, upd):
     elif text.split()[:1] == ["/anketa"] and AN.enabled():
         AN.start(con, uid, msg["chat"]["id"])
     elif AN.enabled() and AN.waiting(con, uid) and not text.startswith("/") and AN.on_message(con, msg):
+        pass
+    elif PO.allowed(uid) and PO.on_message(con, msg):
         pass
     elif text.startswith("/stats"):
         on_stats(con, msg)
@@ -1195,6 +1203,7 @@ def main():
     YM.init(sys.modules[__name__])
     RM.init(sys.modules[__name__])
     ZP.init(sys.modules[__name__])
+    PO.init(sys.modules[__name__])
     try:   # меню команд у кнопки «/» в Telegram
         cmds = [{"command": "start", "description": "Главное меню"}]
         if AN.enabled():

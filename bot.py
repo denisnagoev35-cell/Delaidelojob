@@ -617,6 +617,17 @@ def on_admin(con, msg, text):
     chat = msg["chat"]["id"]
     cmd, *args = text.split()
     cmd = cmd.split("@")[0].lower()
+    if cmd == "/raw":   # что лежит в базе под номером поста: время и начало текста
+        n = int(args[0]) if args and args[0].isdigit() else 0
+        r = con.execute("SELECT * FROM posts WHERE message_id=?", (n,)).fetchone()
+        if not r:
+            send(chat, f"Поста №{n} в базе нет.")
+        else:
+            t = time.strftime("%d.%m %H:%M", time.gmtime(r["date"] + 3 * 3600))
+            own = con.execute("SELECT 1 FROM state WHERE key=?", (f"own_post:{n}",)).fetchone()
+            send(chat, f"Пост №{n} · {t} МСК · {'через бота' if own else 'вручную/из канала'}\n\n"
+                       f"{html.escape((r['text'] or '')[:900])}")
+        return
     if cmd == "/zp":
         send(chat, ZP.table(con))
         return

@@ -128,29 +128,33 @@ def hashtags(text, tags=()):
 # ---------- переписывание ----------
 
 GPT_SYSTEM = (
-    "Ты редактор Telegram-канала вакансий HoReCa (Москва и МО). Перепиши вакансию СВОИМИ словами: "
-    "другой порядок, другие формулировки, без копирования фраз оригинала. Факты не меняй и не выдумывай: "
-    "должность, заведение, место (город, метро, адрес), ставка и проценты, график, обязанности, требования, "
-    "условия — всё, что есть в тексте, и ничего сверх. Ставки пиши цифрами как в оригинале.\n"
-    "Формат (обычный текст, без markdown, без звёздочек и решёток):\n"
-    "1-я строка: эмодзи + должность + «в» + заведение (если названо), например «💨 Кальянный мастер в «Название»».\n"
-    "Пустая строка, затем строки с эмодзи: 📍 место, 💰 оплата, 🗓 график, и при наличии: "
-    "✅ что даём (условия), 📋 что делать, 👤 кого ждём.\n"
-    "Каждый пункт — коротко, через запятую или с новой строки с «— ».\n"
-    "Не пиши контакты, ссылки, хэштеги, призывы подписаться, названия других каналов, слово [контакт]. "
-    "Ответь только текстом поста, до 700 знаков."
+    "Ты редактор Telegram-канала вакансий HoReCa (Москва и МО). Разбери вакансию и перескажи СВОИМИ словами, "
+    "коротко. Факты не меняй и не выдумывай, ничего не теряй из важного: ставка, проценты, чаевые, такси, "
+    "средний доход, график и часы, когда выплаты, требования, обязанности, условия, скидки, обучение.\n"
+    "Ответь ТОЛЬКО JSON:\n"
+    '{"venue": название заведения как в тексте или null,\n'
+    ' "place": "м. Станция, улица, дом" или город — коротко, или null,\n'
+    ' "positions": [ — каждая должность ОТДЕЛЬНЫМ объектом, даже если их в посте несколько\n'
+    '   {"title": "Кальянный мастер" — должность с большой буквы, без «требуется»,\n'
+    '    "pay": "2 000 ₽ за смену + 10% + чай" — коротко, только деньги, или null,\n'
+    '    "schedule": "2/2, 3/3 · 13:00–02:00, пт–сб до 04:00" или null,\n'
+    '    "details": ["до 4 пунктов: доход в месяц, такси, кого ждём, что делать — каждый до 80 знаков"]}],\n'
+    ' "perks": ["до 4 общих плюсов: выплаты раз в 2 недели, скидка 40% на меню, обучение — до 60 знаков"],\n'
+    ' "contact_note": "как откликаться БЕЗ номеров и ников: мессенджеры, имя, пометка" или null}\n'
+    "Пиши числа с пробелом в тысячах (2 000), «₽» вместо «рублей». Без эмодзи, без markdown, без контактов, "
+    "ссылок, хэштегов и названий других каналов."
 )
 
+PROF_EMOJI = {"kalyan": "💨", "bar": "🍸", "barista": "☕", "waiter": "🍽", "cook": "👨‍🍳", "hostess": "🛎",
+              "staff": "🧹", "courier": "🛵"}
 
-def gpt_rewrite(text):
+
+def _gpt(messages, max_tokens="1200", temperature=0.3):
     if not (PB.YC_KEY and PB.YC_FOLDER):
         return None
-    body = {
-        "modelUri": f"gpt://{PB.YC_FOLDER}/{MODEL}",
-        "completionOptions": {"stream": False, "temperature": 0.4, "maxTokens": "900"},
-        "messages": [{"role": "system", "text": GPT_SYSTEM},
-                     {"role": "user", "text": PB.strip_contacts(text)[:3500]}],
-    }
+    body = {"modelUri": f"gpt://{PB.YC_FOLDER}/{MODEL}",
+            "completionOptions": {"stream": False, "temperature": temperature, "maxTokens": max_tokens},
+            "messages": messages}
     try:
         import http.client
         c = http.client.HTTPSConnection("llm.api.cloud.yandex.net", timeout=40)
@@ -163,11 +167,91 @@ def gpt_rewrite(text):
         if r.status != 200:
             log.warning("YandexGPT (пост) %s: %s", r.status, raw[:300])
             return None
-        out = json.loads(raw)["result"]["alternatives"][0]["message"]["text"]
+        return json.loads(raw)["result"]["alternatives"][0]["message"]["text"]
     except Exception as e:
         log.warning("YandexGPT (пост) failed: %s", e)
         return None
-    return tidy(out)
+
+
+def gpt_rewrite(text):
+    """Вакансия → поля (dict) или None."""
+    out = _gpt([{"role": "system", "text": GPT_SYSTEM},
+                {"role": "user", "text": PB.strip_contacts(text)[:3500]}])
+    g = PB.extract_json(out) if out else None
+    if not g or not isinstance(g.get("positions"), list) or not g["positions"]:
+        return None
+    return g
+
+
+def _s(v, limit=120):
+    """Строка из поля нейросети: без контактов, хэштегов, markdown; пустое — ''."""
+    if not isinstance(v, str):
+        return ""
+    v = PB.CONTACT_RE.sub("", v).replace("[контакт]", "")
+    v = B.HASHTAG_RE.sub("", re.sub(r"\*\*|__|`", "", v))
+    v = re.sub(r"\s+", " ", v).strip(" .;,—-")
+    return v[:limit].rstrip() if v.lower() not in ("null", "none", "нет") else ""
+
+
+def _list(v, n, limit):
+    items = (_s(re.sub(r"(?<![\w.])@\w+", "", i) if isinstance(i, str) else i, limit)
+             for i in (v if isinstance(v, list) else []))
+    return [x for x in items if x and not _call_only(x)][:n]
+
+
+def render(g, tags, conts, cut=0):
+    """Поля → пост в HTML. cut — сколько пунктов подробностей срезать с конца (чтобы влезть под обложку)."""
+    e = html.escape
+    pos = [p for p in g.get("positions", []) if isinstance(p, dict) and _s(p.get("title"))][:4]
+    lines = [" ".join(tags), ""] if tags else []
+    venue, place = _s(g.get("venue"), 50), _s(g.get("place"), 90)
+    for p in pos:
+        title = _s(p.get("title"), 60)
+        prof = PB.find_prof(title, [], B.PROF_TAGS)
+        emo = PROF_EMOJI.get(prof, "💼")
+        pay = _s(p.get("pay"), 70)
+        lines.append(f"<b>{emo} {e(title)}{' — ' + e(pay) if pay else ''}</b>")
+    where = " · ".join(x for x in (f"«{venue}»" if venue and not venue.startswith("«") else venue, place) if x)
+    if where:
+        lines.append(f"📍 {e(where)}")
+    # подробности — в свёрнутом блоке
+    blocks = []
+    for p in pos:
+        det = _list(p.get("details"), 4, 90)
+        sch = _s(p.get("schedule"), 80)
+        head = (f"<b>{e(_s(p.get('title'), 60))}</b>" if len(pos) > 1 else "") + \
+               (f"{' · ' if len(pos) > 1 else ''}🗓 {e(sch)}" if sch else "")
+        blocks.append([head] if head else [])
+        blocks[-1] += [f"• {e(x)}" for x in det]
+    perks = _list(g.get("perks"), 4, 70)
+    flat = [(bi, li) for bi, b in enumerate(blocks) for li in range(len(b)) if b[li].startswith("• ")]
+    for bi, li in reversed(flat[len(flat) - cut:] if cut else []):
+        blocks[bi][li] = None
+    perks = perks[:max(0, len(perks) - max(0, cut - len(flat)))]
+    body = "\n\n".join("\n".join(x for x in b if x) for b in blocks if any(b))
+    if perks:
+        pk = "; ".join(perks)
+        body += ("\n\n" if body else "") + "✅ " + e(pk[:1].upper() + pk[1:])
+    if body:
+        lines += ["", f"<blockquote expandable>{body}</blockquote>"]
+    note = _s(g.get("contact_note"), 120)
+    if conts or note:
+        lines += ["", "📩 <b>Отклик:</b> " + e(", ".join(conts)) + (f" ({e(note)})" if conts and note else e(note))]
+    lines += ["", e(FOOTER)]
+    return "\n".join(lines)
+
+
+def plain_len(h):
+    """Длина так, как её считает Telegram (без тегов)."""
+    return len(html.unescape(re.sub(r"<[^>]+>", "", h or "")))
+
+
+def render_fit(g, tags, conts, limit=1000):
+    for cut in range(0, 13):
+        h = render(g, tags, conts, cut)
+        if plain_len(h) <= limit:
+            return h
+    return h
 
 
 CALL_WORDS = {"пиши", "пишите", "писать", "звони", "звоните", "звонить", "контакт", "контакты", "контакты:",
@@ -192,15 +276,45 @@ def tidy(s):
 
 
 def build(body, tags, conts):
-    """Пост целиком (обычный текст): хэштеги, пустая строка, текст, отклик, пустая строка, подвал."""
+    """Запасной пост без нейросети (HTML): хэштеги, текст, отклик, подвал."""
+    e = html.escape
     parts = []
     if tags:
         parts += [" ".join(tags), ""]
-    parts.append(body.strip())
+    parts.append(e(body.strip()))
     if conts:
-        parts.append("\n📩 Отклик: " + ", ".join(conts))
-    parts += ["", FOOTER]
+        parts.append("\n📩 <b>Отклик:</b> " + e(", ".join(conts)))
+    parts += ["", e(FOOTER)]
     return "\n".join(parts)
+
+
+def entities_html(text, entities):
+    """Текст с форматированием Telegram (entities, смещения в UTF-16) → HTML для parse_mode=HTML."""
+    tags = {"bold": ("<b>", "</b>"), "italic": ("<i>", "</i>"), "underline": ("<u>", "</u>"),
+            "strikethrough": ("<s>", "</s>"), "code": ("<code>", "</code>"), "spoiler": ("<tg-spoiler>", "</tg-spoiler>"),
+            "blockquote": ("<blockquote>", "</blockquote>"),
+            "expandable_blockquote": ("<blockquote expandable>", "</blockquote>")}
+    u = text.encode("utf-16-le")
+    n = len(u) // 2
+    opens, closes = {}, {}
+    for en in entities or []:
+        t = en.get("type")
+        if t == "text_link":
+            o, c = f'<a href="{html.escape(en.get("url", ""), quote=True)}">', "</a>"
+        elif t in tags:
+            o, c = tags[t]
+        else:
+            continue
+        a, b = en["offset"], en["offset"] + en["length"]
+        opens.setdefault(a, []).append((b, o))
+        closes.setdefault(b, []).append((a, c))
+    out, pos = [], 0
+    for k in sorted(set(opens) | set(closes) | {n}):
+        out.append(html.escape(u[pos * 2:k * 2].decode("utf-16-le")))
+        out += [c for a, c in sorted(closes.get(k, []), key=lambda x: -x[0])]
+        out += [o for b, o in sorted(opens.get(k, []), key=lambda x: -x[0])]
+        pos = k
+    return "".join(out)
 
 
 
@@ -385,19 +499,19 @@ def preview(con, uid, chat):
     notes = []
     if d.get("by") == "raw":
         notes.append("⚠️ Нейросеть не ответила — текст только очищен. «🔁 Переписать ещё» или «✏️ Исправить».")
-    if len(text) > _limit(con, d):
-        notes.append(f"⚠️ {len(text)} знаков, лимит {_limit(con, d)}"
+    if plain_len(text) > _limit(con, d):
+        notes.append(f"⚠️ {plain_len(text)} знаков, лимит {_limit(con, d)}"
                      + (" для поста с обложкой" if _cover_file(con, d) else "") + " — сократи («✏️ Исправить»).")
     head = "👀 <b>Превью</b>" + (f" (из «{html.escape(d['src_title'])}»)" if d.get("src_title") else "")
     B.send(chat, "\n".join([head] + notes))
     fid = _cover_file(con, d)
-    if fid and len(text) <= CAPTION_MAX:
+    if fid and plain_len(text) <= CAPTION_MAX:
         try:
-            send_photo(con, chat, fid, html.escape(text), _kb(con, d))
+            send_photo(con, chat, fid, text, _kb(con, d))
             return
         except B.TgError as e:
             log.warning("posting preview photo: %s", e)
-    B.send(chat, html.escape(text), _kb(con, d))
+    B.send(chat, text, _kb(con, d))
 
 
 def start(con, msg):
@@ -431,11 +545,12 @@ def start(con, msg):
 def _rewrite(con, uid, d):
     skip = [d.get("src_user"), B.channel_username() or ""]
     base = clean(d["src"], skip)
-    body = gpt_rewrite(base)
-    d["by"] = "gpt" if body else "raw"
-    if not body:   # без нейросети — очищенный исходник без контактов (они уйдут строкой «Отклик»)
-        body = tidy(PB.CONTACT_RE.sub("", base))
-    d["text"] = build(body, d["tags"], d["contacts"])
+    g = gpt_rewrite(base)
+    d["by"] = "gpt" if g else "raw"
+    if g:   # с запасом под обложку (1024): лишние подробности срезаются с конца
+        d["text"] = render_fit(g, d["tags"], d["contacts"], CAPTION_MAX - 24)
+    else:   # без нейросети — очищенный исходник без контактов (они уйдут строкой «Отклик»)
+        d["text"] = build(tidy(PB.CONTACT_RE.sub("", base)), d["tags"], d["contacts"])
     d.pop("wait", None)
     _set(con, uid, d)
 
@@ -444,7 +559,7 @@ def on_edit_text(con, msg):
     """Прислали исправленный текст поста целиком."""
     uid = msg["from"]["id"]
     d = _get(con, uid)
-    d["text"] = (msg.get("text") or "").strip()
+    d["text"] = entities_html(msg.get("text") or "", msg.get("entities")).strip()   # жирный, цитаты сохраняем
     d["by"] = "manual"
     d.pop("wait", None)
     _set(con, uid, d)
@@ -535,8 +650,8 @@ def callback(con, uid, chat, mid, data):
 
 def _to_channel(con, text, fid):
     if fid:
-        return send_photo(con, B.CHANNEL, fid, html.escape(text))
-    return B.tg("sendMessage", chat_id=B.CHANNEL, text=html.escape(text), parse_mode="HTML",
+        return send_photo(con, B.CHANNEL, fid, text)
+    return B.tg("sendMessage", chat_id=B.CHANNEL, text=text, parse_mode="HTML",
                 disable_web_page_preview=True)
 
 
@@ -564,8 +679,8 @@ def _after(con, uid, m, note):
 
 
 def _check_len(con, chat, d):
-    if len(d.get("text", "")) > _limit(con, d):
-        B.send(chat, f"⚠️ {len(d['text'])} знаков, лимит {_limit(con, d)}. Сократи через «✏️ Исправить» "
+    if plain_len(d.get("text", "")) > _limit(con, d):
+        B.send(chat, f"⚠️ {plain_len(d['text'])} знаков, лимит {_limit(con, d)}. Сократи через «✏️ Исправить» "
                      "или убери обложку.")
         return False
     return True
@@ -727,7 +842,8 @@ def queue_list(con, chat):
     lines = [f"🕒 <b>Запланировано: {len(rows)}</b>"]
     btns = []
     for r in rows[:30]:
-        first = next((l for l in r["text"].splitlines() if l.strip() and not l.startswith("#")), "")[:45]
+        plain = html.unescape(re.sub(r"<[^>]+>", "", r["text"]))
+        first = next((l for l in plain.splitlines() if l.strip() and not l.startswith("#")), "")[:45]
         lines.append(f"• <b>{fmt_at(r['at'])}</b>{' 🖼' if r['file_id'] else ''} — {html.escape(first)}")
         btns.append([(f"{time.strftime('%d.%m %H:%M', time.gmtime(r['at'] + MSK))} ⚙️", f"po:qone:{r['id']}")])
     B.send(chat, "\n".join(lines), B.kb(btns))
@@ -741,13 +857,13 @@ def queue_one(con, chat, qid):
     kbd = B.kb([[("🕒 Другое время", f"po:qtime:{qid}"), ("▶️ Сейчас", f"po:qnow:{qid}")],
                 [("🗑 Убрать из очереди", f"po:qdel:{qid}")], [("↩️ К очереди", "po:qlist")]])
     head = f"🕒 <b>{fmt_at(r['at'])}</b>\n\n"
-    if r["file_id"] and len(head) + len(r["text"]) <= CAPTION_MAX:
+    if r["file_id"] and plain_len(head) + plain_len(r["text"]) <= CAPTION_MAX:
         try:
-            send_photo(con, chat, r["file_id"], head + html.escape(r["text"]), kbd)
+            send_photo(con, chat, r["file_id"], head + r["text"], kbd)
             return
         except B.TgError:
             pass
-    B.send(chat, head + html.escape(r["text"]), kbd)
+    B.send(chat, head + r["text"], kbd)
 
 
 def _publish_q(con, r):
@@ -759,7 +875,7 @@ def _publish_q(con, r):
         for aid in {r["uid"]} | B.ADMIN_IDS:
             try:
                 B.send(aid, f"❌ Запланированный пост ({fmt_at(r['at'])}) не вышел: {html.escape(str(e))}\n"
-                            f"Текст:\n{html.escape(r['text'][:1500])}")
+                            f"Текст:\n{html.escape(html.unescape(re.sub(r'<[^>]+>', '', r['text']))[:1500])}")
             except B.TgError:
                 pass
         return None
@@ -781,7 +897,7 @@ def tick(con):
             for aid in {r["uid"]} | B.ADMIN_IDS:
                 try:
                     B.send(aid, f"⚠️ Пост на {fmt_at(r['at'])} не вышел вовремя (бот был недоступен). "
-                                f"Текст:\n{html.escape(r['text'][:1500])}")
+                                f"Текст:\n{html.escape(html.unescape(re.sub(r'<[^>]+>', '', r['text']))[:1500])}")
                 except B.TgError:
                     pass
             continue

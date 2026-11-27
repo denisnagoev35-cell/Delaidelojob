@@ -761,6 +761,74 @@ def _rewrite(con, uid, d):
     _set(con, uid, d)
 
 
+PATCH_RE = re.compile(r"^\s*(?P<k>адрес|место|📍|метро|м\.|ставка|оплата|зп|💰|график|🗓|отклик|контакт\w*|📩)\s*[:—-]?\s*",
+                      re.I)
+
+
+def apply_patch(h, msg_text):
+    """Короткая правка одной строкой: «адрес …», «ставка …», «график …», «отклик …».
+    Возвращает (новый HTML, что поменяли) или (None, причина)."""
+    t = (msg_text or "").strip()
+    m = PATCH_RE.match(t)
+    if not m or "\n" in t or len(t) > 250:
+        return None, None
+    key, val = m.group("k").lower(), t[m.end():].strip()
+    if key in ("м.", "метро"):
+        val = t                                  # «м. Арбатская …» — целиком
+    if not val:
+        return None, "пустое значение"
+    e = html.escape(val)
+    lines = h.split("\n")
+    heads = [i for i, l in enumerate(lines) if l.startswith("<b>") and not l.startswith("<b>Отклик")
+             and " — " in l and "<blockquote" not in l]
+    if key in ("адрес", "место", "📍", "метро", "м."):
+        i = next((i for i, l in enumerate(lines) if l.startswith("📍 ")), None)
+        if i is not None:
+            venue = re.match(r"📍 («[^»]*»)", lines[i])
+            lines[i] = f"📍 {venue.group(1) + ' · ' if venue else ''}{e}"
+        elif heads:
+            lines.insert(heads[-1] + 1, f"📍 {e}")
+        else:
+            return None, "не нашёл, куда вставить адрес"
+        return "\n".join(lines), "адрес"
+    if key in ("ставка", "оплата", "зп", "💰"):
+        if len(heads) != 1:
+            return None, "в посте несколько должностей — пришли пост целиком"
+        i = heads[0]
+        lines[i] = re.sub(r" — .*</b>$", f" — {e}</b>", lines[i])
+        return "\n".join(lines), "ставку"
+    if key in ("график", "🗓"):
+        for i, l in enumerate(lines):
+            j = l.find("🗓 ")
+            if j >= 0:
+                lines[i] = l[:j] + f"🗓 {_cap(e)}"
+                return "\n".join(lines), "график"
+        i = next((i for i, l in enumerate(lines) if l.startswith("<blockquote expandable>")), None)
+        if i is not None:
+            lines[i] = lines[i].replace("<blockquote expandable>", f"<blockquote expandable>🗓 {_cap(e)}\n", 1)
+            return "\n".join(lines), "график"
+        # блока подробностей нет — создаём после адреса или заголовка
+        j = next((i for i, l in enumerate(lines) if l.startswith("📍 ")), heads[-1] if heads else None)
+        if j is None:
+            return None, "не нашёл, куда вставить график — пришли пост целиком"
+        lines[j + 1:j + 1] = ["", f"<blockquote expandable>🗓 {_cap(e)}</blockquote>"]
+        return "\n".join(lines), "график"
+    # отклик
+    i = next((i for i, l in enumerate(lines) if l.startswith("📩 ")), None)
+    new = f"📩 <b>Отклик:</b> {e}"
+    if i is not None:
+        lines[i] = new
+    else:
+        j = next((i for i, l in enumerate(lines) if l.startswith("📝 ")), len(lines))
+        lines[j:j] = [new, ""]
+    return "\n".join(lines), "отклик"
+
+
+PATCH_HELP = ("Не понял правку. Можно одной строкой: <code>адрес м. Арбатская, ул. Новый Арбат 21</code>, "
+              "<code>ставка 4 000 ₽ за смену + %</code>, <code>график 2/2 с 12:00</code>, "
+              "<code>отклик @username</code> — или пришли пост целиком.")
+
+
 def auto_format(plain):
     """Правка пришла без форматирования (Android копирует голый текст) — восстанавливаем наш формат:
     жирные «эмодзи Должность — ставка», подробности (🗓 … ✅) в свёрнутом блоке, жирное «Отклик:»."""
@@ -790,6 +858,24 @@ def on_edit_text(con, msg):
     """Прислали исправленный текст поста целиком."""
     uid = msg["from"]["id"]
     d = _get(con, uid)
+    new, what = apply_patch(d.get("text", ""), msg.get("text"))
+    if new or what:
+        d.pop("wait", None)
+        if new:
+            d["text"] = new
+            d["src"] = d.get("src", "") + "\n" + msg["text"]   # свои цифры — не «выдуманные»
+            if what == "адрес":
+                d["no_place"] = False
+            _set(con, uid, d)
+            B.send(msg["chat"]["id"], f"✏️ Поменял {what}.")
+        else:
+            _set(con, uid, d)
+            B.send(msg["chat"]["id"], f"⚠️ Не поменял: {what}.")
+        preview(con, uid, msg["chat"]["id"])
+        return
+    if len((msg.get("text") or "").strip()) < MIN_LEN:
+        B.send(msg["chat"]["id"], PATCH_HELP)
+        return
     ents = [x for x in (msg.get("entities") or []) if x.get("type") not in ("url", "mention", "hashtag",
                                                                            "phone_number", "email")]
     # с форматированием — сохраняем как есть; без (Android копирует голый текст) — восстанавливаем наш формат
@@ -823,8 +909,9 @@ def callback(con, uid, chat, mid, data):
             queue_one(con, chat, qid)
         elif act == "qedit":
             _qedit_set(con, uid, qid)
-            B.send(chat, "Пришли исправленный текст поста целиком (скопируй из карточки выше и поправь). "
-                         "Строку с временем можно не убирать.")
+            B.send(chat, "Пришли исправленный пост целиком (зажми карточку → «Копировать», поправь, отправь; "
+                         "строку с временем можно не убирать) или одну строку: <code>адрес …</code>, "
+                         "<code>ставка …</code>, <code>график …</code>, <code>отклик …</code>.")
         elif act == "qcov":
             _markup(chat, mid, queue_cover_kb(con, qid))
         elif act == "qcset":
@@ -872,8 +959,9 @@ def callback(con, uid, chat, mid, data):
     elif act == "edit":
         d["wait"] = "edit"
         _set(con, uid, d)
-        B.send(chat, "Пришли исправленный текст поста целиком (скопируй из превью и поправь). "
-                     "Он уйдёт в канал как есть.")
+        B.send(chat, "Пришли исправленный пост целиком (зажми превью → «Копировать», поправь, отправь) "
+                     "или одну строку: <code>адрес …</code>, <code>ставка …</code>, <code>график …</code>, "
+                     "<code>отклик …</code>.")
     elif act == "cover":
         _markup(chat, mid, cover_kb(con, d))
     elif act == "back":
@@ -1157,6 +1245,20 @@ def queue_edit_text(con, msg, qid):
     r = con.execute("SELECT * FROM post_queue WHERE id=? AND status='wait'", (qid,)).fetchone()
     if not r:
         B.send(chat, "Этот пост уже вышел или удалён — правка не сохранена.")
+        return
+    new, what = apply_patch(r["text"], msg.get("text"))
+    if new or what:
+        if new:
+            con.execute("UPDATE post_queue SET text=? WHERE id=?", (new, qid))
+            con.commit()
+            B.send(chat, f"✏️ Поменял {what}. Так пост выйдет:")
+        else:
+            B.send(chat, f"⚠️ Не поменял: {what}.")
+        queue_one(con, chat, qid)
+        return
+    if len((msg.get("text") or "").strip()) < MIN_LEN:
+        B.send(chat, PATCH_HELP)
+        _qedit_set(con, uid, qid)    # ждём правку дальше
         return
     raw, ents = msg.get("text") or "", msg.get("entities") or []
     first = raw.split("\n", 1)[0]

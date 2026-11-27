@@ -64,7 +64,7 @@ def waiting_edit(con, uid):
 
 TG_LINK_RE = re.compile(r"(?:https?://)?t\.me/(\+?[A-Za-z0-9_]+)", re.I)
 NICK_RE = re.compile(r"(?<![\w.])@([A-Za-z0-9_]{4,32})")
-PHONE_RE = re.compile(r"(?:\+7|8)[\s\-(]*\d{3}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}")
+PHONE_RE = re.compile(r"(?:(?:\+7|8)[\s\-(]*)?\(?9\d{2}\)?[\s\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}(?!\d)")
 MAIL_RE = re.compile(r"[\w.\-]+@[\w\-]+\.[A-Za-z.]{2,}")
 WA_RE = re.compile(r"(?:https?://)?wa\.me/\+?\d+", re.I)
 # строки-«подвалы» чужих каналов
@@ -201,7 +201,7 @@ def _gpt(messages, max_tokens="1200", temperature=0.3):
 def gpt_rewrite(text):
     """Вакансия → поля (dict) или None."""
     out = _gpt([{"role": "system", "text": GPT_SYSTEM},
-                {"role": "user", "text": PB.strip_contacts(text)[:3500]}])
+                {"role": "user", "text": PHONE_RE.sub("[контакт]", PB.strip_contacts(text))[:3500]}])
     g = PB.extract_json(out) if out else None
     if not g or not isinstance(g.get("positions"), list) or not g["positions"]:
         return None
@@ -212,7 +212,7 @@ def _s(v, limit=120):
     """Строка из поля нейросети: без контактов, хэштегов, markdown; пустое — ''."""
     if not isinstance(v, str):
         return ""
-    v = PB.CONTACT_RE.sub("", v).replace("[контакт]", "")
+    v = PHONE_RE.sub("", PB.CONTACT_RE.sub("", v)).replace("[контакт]", "")
     v = B.HASHTAG_RE.sub("", re.sub(r"\*\*|__|`", "", v))
     v = re.sub(r"\s+", " ", v).strip(" .;,—-")
     return v[:limit].rstrip() if v.lower() not in ("null", "none", "нет") else ""
@@ -538,11 +538,31 @@ def _limit(con, d):
     return CAPTION_MAX if _cover_file(con, d) else TEXT_MAX
 
 
+def _nums(t):
+    """Числа от 100: «4 500», «4.500», «4500» → 4500; «110-120 тыс» → 110, 120."""
+    t = re.sub(r"(?<=\d)[\s\u00a0.,](?=\d{3}\b)", "", html.unescape(re.sub(r"<[^>]+>", "", t or "")))
+    return {int(x) for x in re.findall(r"\d+", t) if 100 <= int(x) < 10_000_000}
+
+
+def checks(d):
+    """Предупреждения к превью: выдуманные цифры, нет контакта."""
+    out = []
+    head = d.get("text", "").split("<blockquote", 1)[0]
+    src = _nums(d.get("src", "")) | {n * 1000 for n in _nums(d.get("src", "")) if n < 1000}
+    bad = sorted(n for n in _nums(head) - src if not re.search(rf"#\w*{n}", head))
+    if bad and d.get("by") == "gpt":
+        out.append("⚠️ В заголовке есть числа, которых нет в исходнике: " + ", ".join(f"{n:,}".replace(",", " ")
+                                                                                 for n in bad) + " — проверь ставку.")
+    if not d.get("contacts"):
+        out.append("⚠️ Контакт для отклика не нашёл — добавь через «✏️ Исправить».")
+    return out
+
+
 def preview(con, uid, chat):
     """Пост так, как он уйдёт в канал (с обложкой — фото с подписью), и кнопки под ним."""
     d = _get(con, uid)
     text = d.get("text", "")
-    notes = []
+    notes = checks(d)
     if d.get("by") == "raw":
         notes.append("⚠️ Нейросеть не ответила — текст только очищен. «🔁 Переписать ещё» или «✏️ Исправить».")
     if plain_len(text) > _limit(con, d):
@@ -569,6 +589,8 @@ def start(con, msg):
     forwarded = bool(msg.get("forward_origin") or msg.get("forward_from_chat") or msg.get("forward_from"))
     if len(raw.strip()) < MIN_LEN and not forwarded:
         return False
+    if not raw.strip() and msg.get("media_group_id"):
+        return True   # остальные фото альбома: подпись приходит только с одним из них
     if not raw.strip():
         B.send(chat, "В пересланном посте нет текста (длинные подписи с Premium Telegram боту не отдаёт). "
                      "Скопируй текст и пришли сообщением.")
@@ -579,7 +601,7 @@ def start(con, msg):
     prof = (PB.find_profs(raw, tags + B.post_tags(raw), B.PROF_TAGS) or [None])[0]
     d = {"src": raw, "src_user": src_user, "src_title": src_title,
          "photo": (msg.get("photo") or [{}])[-1].get("file_id"), "prof": prof, "tags": tags,
-         "contacts": contacts(raw, skip),
+         "contacts": contacts(clean(raw, skip), skip),
          # обложку выбирают кнопкой; подходящая (администратор/менеджер по тексту → профессия → общая) — ⭐ первой
          "cover": None, "suggest": pick_cover(con, raw, prof)}
     B.send(chat, "✍️ Переписываю…")

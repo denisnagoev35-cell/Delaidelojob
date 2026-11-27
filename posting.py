@@ -103,8 +103,17 @@ def contacts(text, skip=()):
     return out
 
 
+def norm_text(t):
+    """Лишние надстрочные знаки («барной̆», «й» из «и» + U+0306) ломают слова — нейросеть их режет. Склеиваем
+    в обычные буквы (NFC), оставшиеся одиночные знаки убираем."""
+    import unicodedata
+    t = unicodedata.normalize("NFC", t or "")
+    return re.sub(r"[\u0300-\u036f]", "", t)
+
+
 def clean(text, skip=()):
     """Убираем чужие хэштеги, ссылки на каналы и строки-подвалы. Контакты оставляем — их вынет contacts()."""
+    text = norm_text(text)
     skip = {s.lower() for s in skip if s}
     lines = []
     for line in text.splitlines():
@@ -876,7 +885,7 @@ def start(con, msg):
     if not enabled():
         return False
     uid, chat = msg["from"]["id"], msg["chat"]["id"]
-    raw = msg.get("text") or msg.get("caption") or ""
+    raw = norm_text(msg.get("text") or msg.get("caption") or "")
     forwarded = bool(msg.get("forward_origin") or msg.get("forward_from_chat") or msg.get("forward_from"))
     if len(raw.strip()) < MIN_LEN and not forwarded:
         return False

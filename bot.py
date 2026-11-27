@@ -617,6 +617,14 @@ def on_admin(con, msg, text):
     chat = msg["chat"]["id"]
     cmd, *args = text.split()
     cmd = cmd.split("@")[0].lower()
+    if cmd == "/delpost":   # пост удалили из канала — убираем из базы (подборка, дайджест, /zp, рассылка)
+        n = int(args[0]) if args and args[0].isdigit() else 0
+        c1 = con.execute("DELETE FROM posts WHERE message_id=?", (n,)).rowcount
+        con.execute("DELETE FROM vac WHERE message_id=?", (n,))
+        con.execute("DELETE FROM sub_queue WHERE message_id=?", (n,))
+        con.commit()
+        send(chat, f"🗑 Пост №{n} убран из базы бота." if c1 else f"Поста №{n} в базе нет.")
+        return
     if cmd == "/raw":   # что лежит в базе под номером поста: время и начало текста
         n = int(args[0]) if args and args[0].isdigit() else 0
         r = con.execute("SELECT * FROM posts WHERE message_id=?", (n,)).fetchone()
@@ -728,7 +736,7 @@ def on_admin(con, msg, text):
         send(chat, "\n".join(lines))
     else:
         send(chat, "Команды: /podbor · /testrass · /rass · /reparse · /vac N · /mesto N Город · "
-                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest · /digest_pin N · /post · /ochered · /zp_post")
+                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest · /digest_pin N · /post · /ochered · /zp_post · /raw N · /delpost N")
 
 
 def pb_get(con, uid):

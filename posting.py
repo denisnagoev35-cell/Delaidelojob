@@ -692,11 +692,39 @@ def _rewrite(con, uid, d):
     _set(con, uid, d)
 
 
+def auto_format(plain):
+    """Правка пришла без форматирования (Android копирует голый текст) — восстанавливаем наш формат:
+    жирные «эмодзи Должность — ставка», подробности (🗓 … ✅) в свёрнутом блоке, жирное «Отклик:»."""
+    e = html.escape
+    lines = plain.strip("\n").splitlines()
+    heads = tuple(PROF_EMOJI.values()) + ("💼",)
+    q_start = next((i for i, l in enumerate(lines) if l.startswith(("🗓", "• ", "👤"))), None)
+    q_end = next((i for i, l in enumerate(lines) if l.startswith(("📩", "📝"))), len(lines))
+    out = []
+    for i, l in enumerate(lines):
+        x = e(l)
+        if l.startswith(heads) and " — " in l and (q_start is None or i < q_start):
+            x = f"<b>{x}</b>"
+        elif l.startswith("📩 Отклик:"):
+            x = "📩 <b>Отклик:</b>" + e(l[len("📩 Отклик:"):])
+        out.append(x)
+    if q_start is not None and q_start < q_end:
+        body = out[q_start:q_end]
+        while body and not body[-1].strip():   # пустые строки перед «Отклик» — за блоком
+            body.pop()
+        n = q_start + len(body)
+        out = out[:q_start] + [f"<blockquote expandable>{chr(10).join(body)}</blockquote>"] + out[n:]
+    return "\n".join(out)
+
+
 def on_edit_text(con, msg):
     """Прислали исправленный текст поста целиком."""
     uid = msg["from"]["id"]
     d = _get(con, uid)
-    d["text"] = entities_html(msg.get("text") or "", msg.get("entities")).strip()   # жирный, цитаты сохраняем
+    ents = [x for x in (msg.get("entities") or []) if x.get("type") not in ("url", "mention", "hashtag",
+                                                                           "phone_number", "email")]
+    # с форматированием — сохраняем как есть; без (Android копирует голый текст) — восстанавливаем наш формат
+    d["text"] = (entities_html(msg["text"], msg.get("entities")) if ents else auto_format(msg.get("text") or "")).strip()
     d["by"] = "manual"
     d.pop("wait", None)
     _set(con, uid, d)

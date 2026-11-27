@@ -137,6 +137,11 @@ def hashtags(text, tags=()):
     for rx, tag in EXTRA_TAGS:
         if tag not in out and re.search(rx, text or "", re.I):
             out.append(tag)
+    # #кальянщик в канале не ставим: кальянные вакансии — #км / #пкм (подборка понимает их как кальянщика)
+    if "#кальянщик" in out:
+        out.remove("#кальянщик")
+        if "#км" not in out and "#пкм" not in out:
+            out.insert(0, "#км")
     return out
 
 
@@ -545,7 +550,7 @@ def start(con, msg):
     src_user, src_title = source_of(msg)
     skip = [src_user, B.channel_username() or "", B.BOT_USERNAME, "delaijobchat"]
     tags = hashtags(raw, B.post_tags(raw))
-    prof = next((k for k, t in B.PROF_TAGS.items() if t in tags), None)
+    prof = (PB.find_profs(raw, tags + B.post_tags(raw), B.PROF_TAGS) or [None])[0]
     d = {"src": raw, "src_user": src_user, "src_title": src_title,
          "photo": (msg.get("photo") or [{}])[-1].get("file_id"), "prof": prof, "tags": tags,
          "contacts": contacts(raw, skip),

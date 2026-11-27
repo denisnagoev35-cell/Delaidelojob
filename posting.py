@@ -198,7 +198,8 @@ GPT_SYSTEM = (
     '— до 60 знаков"],\n'
     ' "highlight": ["1–2 самых цепляющих для соискателя плюса из текста, до 30 знаков каждый: «такси после '
     'закрытия», «рост до кальянного мастера», «бесплатное питание», «научим с нуля», «высокие чаевые», «оформление '
-    'по ТК». НЕ ставка и НЕ график. Ничего особенного нет — пустой список []"],\n'
+    'по ТК». Про опыт — только «научим с нуля» или «можно без опыта» и только если так в тексте. '
+    'НЕ ставка и НЕ график. Ничего особенного нет — пустой список []"],\n'
     ' "contact_note": "как откликаться БЕЗ номеров и ников: что прислать (о себе, опыт, фото), мессенджер, имя, '
     'пометка — если в тексте это есть" или null}\n'
     "Никогда не пиши «не указано», «нет данных» и т. п. — чего нет в тексте, того просто нет. "
@@ -772,12 +773,25 @@ def ensure_noexp(g, src):
     return g
 
 
+def fix_highlight(g, src):
+    """Фишка про опыт — ровной фразой и только если это есть в исходнике («опыт научим» → «научим с нуля»)."""
+    hl = g.get("highlight") if isinstance(g.get("highlight"), list) else []
+    out = []
+    for x in hl:
+        if isinstance(x, str) and HAS_NOEXP_RE.search(x):
+            x = "научим с нуля" if TEACH_RE.search(src) else ("можно без опыта" if NOEXP_RE.search(src) else None)
+        if x:
+            out.append(x)
+    g["highlight"] = out
+    return g
+
+
 def _rewrite(con, uid, d):
     skip = [d.get("src_user"), B.channel_username() or ""]
     base = clean(d["src"], skip)
     g = gpt_rewrite(base)
     if g:
-        g = ensure_noexp(g, base)
+        g = fix_highlight(ensure_noexp(g, base), base)
         d["no_place"] = not _s(g.get("place"))
     d["by"] = "gpt" if g else "raw"
     if g:   # с запасом под обложку (1024): лишние подробности срезаются с конца

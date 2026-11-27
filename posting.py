@@ -585,7 +585,20 @@ def _upload(chat, path, caption, markup):
         return _upload_bytes(chat, f.read(), caption, markup)
 
 
-def _upload_bytes(chat, data, caption, markup):
+def _upload_bytes(chat, data, caption, markup, tries=3):
+    """Загрузка фото; сеть иногда подвисает — до 3 попыток с паузой."""
+    for i in range(tries):
+        try:
+            return _upload_once(chat, data, caption, markup)
+        except B.TgError as e:
+            if i == tries - 1 or not re.search(r"Timeout|timed out|Connection|Reset|Broken|RemoteDisconnected|OSError",
+                                               str(e)):
+                raise
+            log.warning("posting upload retry %s: %s", i + 1, e)
+            time.sleep(2 * (i + 1))
+
+
+def _upload_once(chat, data, caption, markup):
     import uuid
     bd = "----ddpost" + uuid.uuid4().hex
     fields = {"chat_id": str(chat), "caption": caption, "parse_mode": "HTML"}

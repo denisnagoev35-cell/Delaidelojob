@@ -280,12 +280,12 @@ def render(g, tags, conts, cut=0):
     e = html.escape
     pos = [p for p in g.get("positions", []) if isinstance(p, dict) and _s(p.get("title"))][:4]
     lines = [" ".join(tags), ""] if tags else []
-    venue, place = _s(g.get("venue"), 50), _s(g.get("place"), 90)
+    venue, place = _cut(_s(g.get("venue"), 400), 50), _cut(_s(g.get("place"), 400), 110)
     for p in pos:
         title = _s(p.get("title"), 60)
         prof = PB.find_prof(title, [], B.PROF_TAGS)
         emo = PROF_EMOJI.get(prof, "💼")
-        pay = _s(p.get("pay"), 70)
+        pay = _cut(_s(p.get("pay"), 400), 90)
         pay = "" if EMPTY_RE.search(pay) else pay
         lines.append(f"<b>{emo} {e(title)}{' — ' + e(pay) if pay else ''}</b>")
     where = " · ".join(x for x in (f"«{venue}»" if venue and not venue.startswith("«") else venue, place) if x)
@@ -294,11 +294,11 @@ def render(g, tags, conts, cut=0):
     # подробности — в свёрнутом блоке
     blocks = []
     for p in pos:
-        sch = _cap(_s(p.get("schedule"), 80))
+        sch = _cap(_cut(_s(p.get("schedule"), 400), 150))
         if EMPTY_RE.search(sch):
             sch = ""
         det = [x for x in _list(p.get("details"), 6 if len(pos) == 1 else 4, 90) if not _dup(x, sch)]
-        req = [x if re.match(r"[A-ZА-ЯЁ]{2}", x) else x[:1].lower() + x[1:] for x in _list(p.get("requirements"), 6, 45)]
+        req = [x if re.match(r"[A-ZА-ЯЁ]{2}", x) else x[:1].lower() + x[1:] for x in _list(p.get("requirements"), 6, 70)]
         head = (f"<b>{e(_s(p.get('title'), 60))}</b>" if len(pos) > 1 else "") + \
                (f"{' · ' if len(pos) > 1 else ''}🗓 {e(sch)}" if sch else "")
         blocks.append([head] if head else [])
@@ -594,6 +594,12 @@ def checks(d):
                                                                                  for n in bad) + " — проверь ставку.")
     if not d.get("contacts"):
         out.append("⚠️ Контакт для отклика не нашёл — добавь через «✏️ Исправить».")
+    if d.get("by") == "gpt" and d.get("no_place"):
+        out.append("⚠️ Нет адреса или метро — если в исходнике есть, добавь через «✏️ Исправить».")
+    first = re.sub(r"<[^>]+>", "", head).split("\n")
+    titles = [l for l in first if l.startswith(tuple(PROF_EMOJI.values()) + ("💼",))]
+    if d.get("by") == "gpt" and titles and not any(re.search(r"\d", l) for l in titles):
+        out.append("⚠️ В заголовке нет суммы ставки — проверь исходник.")
     return out
 
 
@@ -674,6 +680,7 @@ def _rewrite(con, uid, d):
     g = gpt_rewrite(base)
     if g:
         g = ensure_noexp(g, base)
+        d["no_place"] = not _s(g.get("place"))
     d["by"] = "gpt" if g else "raw"
     if g:   # с запасом под обложку (1024): лишние подробности срезаются с конца
         titles = "\n".join(_s(p.get("title")) for p in g.get("positions", []) if isinstance(p, dict))

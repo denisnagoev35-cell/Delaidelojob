@@ -682,6 +682,91 @@ def refresh_cover(con, uid, chat):
         make_cover(con, uid, chat, d["gen_src"])
 
 
+# ---------- «Индекс зарплат HoReCa» (/zp_post, только ADMIN_IDS) ----------
+MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь",
+          "декабрь"]
+
+
+def _index_month():
+    """Месяц выпуска: в первую неделю месяца — прошлый (индекс за 30 дней), дальше — текущий. → (ключ, «ноябрь», год)."""
+    t = time.gmtime(time.time() + 3 * 3600)
+    y, m = t.tm_year, t.tm_mon
+    if t.tm_mday <= 7:
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    return f"{y}-{m:02d}", MONTHS[m - 1], y
+
+
+def _prev_key(key):
+    y, m = map(int, key.split("-"))
+    y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    return f"{y}-{m:02d}"
+
+
+def zp_post(con, uid, chat):
+    """Индекс в черновик: картинка + текст с выводами, превью с обычными кнопками. В канал — только по кнопке."""
+    rows, n = B.ZP.index_data(con)
+    if not rows:
+        B.send(chat, "📊 Для индекса мало данных: ни у одной профессии нет вилки по всем трём ступеням опыта.")
+        return
+    key, mon, year = _index_month()
+    r = con.execute("SELECT value FROM state WHERE key=?", (f"zp_index:{_prev_key(key)}",)).fetchone()
+    prev = json.loads(r[0]) if r else None
+    con.execute("INSERT OR REPLACE INTO state(key, value) VALUES(?, ?)", (f"zp_index:{key}", json.dumps(
+        {x["prof"]: {"unit": x["unit"], "t": x["t"]} for x in rows})))
+    con.commit()
+    facts = B.ZP.index_facts(rows, prev)
+    e = html.escape
+    text = "\n".join(["#индекс", "", f"📊 <b>Индекс зарплат HoReCa — {mon} {year}</b>",
+                      "Сколько платят в Москве и МО по вакансиям нашего канала за 30 дней — по опыту.", ""] +
+                     [f"• {e(x)}" for x in facts] +
+                     ["", "Посчитать свою вилку по опыту и району → @delaidelo24bot", "", e(FOOTER)])
+    try:
+        import cover_gen as CG
+        jpg = CG.render_index(rows, f"HoReCa  ·  Москва и МО  ·  {mon} {year}", f"по {n} вакансиям канала за 30 дней")
+        m = _upload_bytes(chat, jpg, "", None)
+        fid = m["photo"][-1]["file_id"]
+        try:
+            B.tg("deleteMessage", chat_id=chat, message_id=m["message_id"])
+        except B.TgError:
+            pass
+    except ImportError:
+        fid = None
+        B.send(chat, "⚠️ Нет Pillow — индекс без картинки (<code>apt install -y python3-pil</code>).")
+    except Exception as ex:
+        log.exception("posting: index image")
+        fid = None
+        B.send(chat, f"⚠️ Картинка не собралась: {html.escape(str(ex))[:200]} — индекс без картинки.")
+    _set(con, uid, {"src": html.unescape(re.sub(r"<[^>]+>", "", text)), "text": text, "by": "manual", "kind": "index",
+                    "tags": ["#индекс"], "contacts": [], "cover": "gen" if fid else None, "gen_fid": fid})
+    preview(con, uid, chat)
+
+
+def index_tick(con):
+    """1-го числа с 12:00 МСК — индекс админам на проверку (один раз за месяц)."""
+    t = time.gmtime(time.time() + 3 * 3600)
+    if t.tm_mday != 1 or t.tm_hour < 12:
+        return
+    key = f"zp_index_sent:{t.tm_year}-{t.tm_mon:02d}"
+    if con.execute("SELECT 1 FROM state WHERE key=?", (key,)).fetchone():
+        return
+    con.execute("INSERT OR REPLACE INTO state(key, value) VALUES(?, '1')", (key,))
+    con.commit()
+    index_to_admins(con, "📊 Индекс зарплат за месяц — проверь и опубликуй (в канал сам не уйдёт).")
+
+
+def index_to_admins(con, note):
+    """Индекс — черновиком каждому админу; незаконченный черновик не затираем."""
+    for aid in B.ADMIN_IDS:
+        try:
+            if _get(con, aid):
+                B.send(aid, note + "\nСейчас у тебя открыт другой черновик — закончи его и пришли /zp_post.")
+            else:
+                B.send(aid, note)
+                zp_post(con, aid, aid)
+        except Exception:
+            log.exception("posting: index to admins")
+
+
 # ---------- превью и кнопки ----------
 
 def _kb(con, d):
@@ -763,7 +848,7 @@ def preview(con, uid, chat):
     """Пост так, как он уйдёт в канал (с обложкой — фото с подписью), и кнопки под ним."""
     d = _get(con, uid)
     text = d.get("text", "")
-    notes = checks(d, con)
+    notes = checks(d, con) if d.get("kind") != "index" else []
     if d.get("by") == "raw":
         notes.append("⚠️ Нейросеть не ответила — текст только очищен. «🔁 Переписать ещё» или «✏️ Исправить».")
     if plain_len(text) > _limit(con, d):
@@ -1078,6 +1163,9 @@ def callback(con, uid, chat, mid, data):
         B.send(chat, "❌ Черновик удалён.")
     elif act == "redo":
         _markup(chat, mid, None)
+        if d.get("kind") == "index":
+            zp_post(con, uid, chat)
+            return
         B.send(chat, "✍️ Переписываю ещё раз…")
         _rewrite(con, uid, d)
         refresh_cover(con, uid, chat)
@@ -1441,6 +1529,10 @@ def tick(con):
     """Каждый проход цикла: публикуем всё, чему пришло время (по одному, чтобы не залпом)."""
     if not enabled():
         return
+    try:
+        index_tick(con)
+    except Exception:
+        log.exception("posting: index tick")
     rows = con.execute("SELECT * FROM post_queue WHERE status='wait' AND at<=? ORDER BY at LIMIT 3",
                        (int(time.time()),)).fetchall()
     for r in rows:
@@ -1486,6 +1578,12 @@ def on_message(con, msg):
         B.send(chat, HELP)
     elif cmd == "/ochered":
         queue_list(con, chat)
+    elif cmd == "/zp_post":
+        if uid in B.ADMIN_IDS:
+            zp_post(con, uid, chat)
+        else:   # помощник: индекс уходит Денису на проверку, публикует он
+            index_to_admins(con, "📊 Индекс зарплат (запросил помощник) — проверь и опубликуй.")
+            B.send(chat, "📊 Индекс собран и отправлен Денису на проверку.")
     elif cmd:
         return False
     elif msg.get("text") and _qedit_get(con, uid) and not (msg.get("forward_origin") or msg.get("forward_from_chat")):

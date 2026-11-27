@@ -165,3 +165,58 @@ def table(con):
         lines.append(f"<b>{p['name']}</b> — сейчас в боте: {p['range']}")
         lines.append("   " + " · ".join(parts))
     return "\n".join(lines)
+
+
+# ---------- «Индекс зарплат HoReCa» (/zp_post) ----------
+INDEX_PROFS = [("kalyan", "Кальянщик", "кальянщикам", "кальянщиков"), ("bar", "Бармен", "барменам", "барменов"),
+               ("waiter", "Официант", "официантам", "официантов"), ("cook", "Повар", "поварам", "поваров"),
+               ("hostess", "Хостес", "хостес", "хостес"), ("barista", "Бариста", "бариста", "бариста"),
+               ("staff", "Хозперсонал", "хозперсоналу", "хозперсонала")]
+UNIT_HEAD = {"shift": "₽ за смену", "hour": "₽ за час", "month": "₽ в месяц"}
+
+
+def _cell(lo, hi):
+    return f"{money(lo)}–{money(hi)}" if lo != hi else f"≈ {money(lo)}"
+
+
+def index_data(con, region=None):
+    """Строки индекса: профессия, единица, вилки до года / 1–3 / 3+; профессии без данных — пропускаем."""
+    out, ids = [], set()
+    for k, name, dat, gen in INDEX_PROFS:
+        ts = [tier(con, k, region, e) for e in ("lt1", "1to3", "gt3")]
+        if not all(ts):
+            continue
+        units = {t[0][0] for t in ts}
+        if len(units) != 1:
+            continue
+        unit = units.pop()
+        ids |= {r["message_id"] for r in rows(con, k, region)} | {r["message_id"] for r in rows(con, k)}
+        out.append({"prof": k, "name": name, "dat": dat, "gen": gen, "unit": unit,
+                    "t": [(t[0][1], t[0][2]) for t in ts], "cells": [_cell(t[0][1], t[0][2]) for t in ts]})
+    return out, len(ids)
+
+
+def index_facts(rows_, prev=None):
+    """2–3 вывода по цифрам (без нейросети) + динамика к прошлому месяцу."""
+    sh = [r for r in rows_ if r["unit"] == "shift"]
+    out = []
+    if sh:
+        top = max(sh, key=lambda r: r["t"][2][1])
+        out.append(f"Больше всего платят опытным: {top['dat']} 3+ года — до {money(top['t'][2][1])} ₽ за смену")
+        st = max(sh, key=lambda r: r["t"][0][0])
+        if st is not top:
+            out.append(f"Самый высокий старт — {st['dat']}: от {money(st['t'][0][0])} ₽ за смену в первый год")
+        rest = [r for r in sh if r is not top and r is not st]
+        nar = min(rest, key=lambda r: r["t"][2][1] - r["t"][0][0]) if rest else None
+        if nar:
+            out.append(f"Меньше всего разброс у {nar['gen']}: {money(nar['t'][0][0])}–{money(nar['t'][2][1])} ₽")
+    if prev:
+        for r in rows_:
+            p = prev.get(r["prof"])
+            if not p or p.get("unit") != r["unit"]:
+                continue
+            mid, pmid = sum(r["t"][1]) / 2, sum(p["t"][1]) / 2
+            dlt = _round(mid - pmid, r["unit"])
+            if abs(dlt) >= STEP[r["unit"]]:
+                out.append(f"{r['name']} (1–3 года): {'+' if dlt > 0 else '−'}{money(abs(dlt))} ₽ к прошлому месяцу")
+    return out

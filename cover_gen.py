@@ -99,3 +99,44 @@ def render(photo_bytes, f):
     out = io.BytesIO()
     im.convert("RGB").save(out, "JPEG", quality=90)
     return out.getvalue()
+
+
+def render_index(rows, subtitle, note):
+    """Картинка «Индекс зарплат»: rows — [{"name", "unit", "cells": [до года, 1–3, 3+]}]."""
+    Sx = 2
+    G, ROW = (140, 140, 140), (28, 28, 28)
+    im = Image.new("RGB", (W * Sx, 1350 * Sx), BK); d = ImageDraw.Draw(im)
+    def T(xy, t, f, c, a="la"): d.text((xy[0] * Sx, xy[1] * Sx), t, font=f, fill=c, anchor=a)
+    def f(sz, w=800, it=False): return font(sz * Sx, w, it)
+    L, R = 56, 1024
+    d.rounded_rectangle([L * Sx, 56 * Sx, R * Sx, 256 * Sx], radius=28 * Sx, fill=Y)
+    T((540, 128), "ИНДЕКС ЗАРПЛАТ", f(74, 900, True), BK, "mm")
+    T((540, 205), subtitle, f(34, 700, False), BK, "mm")
+    name_x, cols = L + 28, [465, 690, 905]
+    shift_all = all(r["unit"] == "shift" for r in rows)
+    T((name_x, 318), "₽ за смену" if any(r["unit"] == "shift" for r in rows) else "", f(28, 600, False), G, "lm")
+    for cx, h in zip(cols, ["до года", "1–3 года", "3+ года"]):
+        T((cx, 318), h, f(30, 800, False), Y, "mm")
+    top, bottom, gap = 352, 1080, 12
+    h = min(104, (bottom - top - gap * (len(rows) - 1)) / max(1, len(rows)))
+    for n, r in enumerate(rows):
+        y0 = top + n * (h + gap); cy = y0 + h / 2
+        d.rounded_rectangle([L * Sx, y0 * Sx, R * Sx, (y0 + h) * Sx], radius=20 * Sx, fill=ROW)
+        if r["unit"] != "shift":
+            T((name_x, cy - 14), r["name"], f(38, 800, False), TX, "lm")
+            T((name_x, cy + 24), {"hour": "₽ за час", "month": "₽ в месяц"}[r["unit"]], f(24, 600, False), G, "lm")
+        else:
+            T((name_x, cy), r["name"], f(38, 800, False), TX, "lm")
+        for cx, v in zip(cols, r["cells"]):
+            fv = f(30, 600, False)
+            while d.textlength(v, font=fv) > 215 * Sx:
+                fv = font(int(fv.size * 0.94), 600, False)
+            T((cx, cy), v, fv, TX, "mm")
+    yb = top + len(rows) * (h + gap) + 14
+    T((540, yb + 14), note, f(28, 500, False), G, "mm")
+    d.rounded_rectangle([L * Sx, 1150 * Sx, R * Sx, 1294 * Sx], radius=28 * Sx, fill=Y)
+    T((540, 1198), "Сколько с твоим опытом? Посчитает бот", f(38, 800, True), BK, "mm")
+    T((540, 1250), "@delaidelo24bot   ·   @delaidelojob", f(32, 700, False), BK, "mm")
+    out = io.BytesIO()
+    im.resize((W, 1350), Image.LANCZOS).save(out, "JPEG", quality=92)
+    return out.getvalue()

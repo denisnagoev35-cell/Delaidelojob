@@ -18,7 +18,7 @@ EXTRA = {"kalyan": " + % и чаевые", "bar": " + % и чаевые", "baris
          "cook": "", "hostess": " + чаевые", "staff": ""}
 
 # вакансии начального уровня: для опытных их не берём, для новичков — берём
-ENTRY_RE = re.compile(r"помощник|стаж[её]р|стажировк|ученик|без опыта|обучим с нуля", re.I)
+ENTRY_RE = re.compile(r"помощник|стаж[её]р|стажировк|ученик|без опыта|обучим с нуля|научим с нуля|#пкм|\bпкм\b", re.I)
 
 B = None
 
@@ -220,3 +220,17 @@ def index_facts(rows_, prev=None):
             if abs(dlt) >= STEP[r["unit"]]:
                 out.append(f"{r['name']} (1–3 года): {'+' if dlt > 0 else '−'}{money(abs(dlt))} ₽ к прошлому месяцу")
     return out
+
+
+def why(con, prof, exp="1to3", region=None):
+    """Какие вакансии попали в ступень: № поста, ставка, единица, «новичок?» — для проверки цифр (/zp_why)."""
+    t = _tier(con, prof, region, exp)
+    if not t:
+        return "Данных нет."
+    res, reg, level = t
+    rs = rows(con, prof, reg, level=level)
+    vals = sorted(((_value(r), r) for r in rs if _value(r) and r["unit"] == res[0]), key=lambda x: x[0])
+    head = (f"{prof} · {exp} · {'все' if not level else level} · {reg or 'Москва и МО'}: "
+            f"{money(res[1])}–{money(res[2])} ({UNIT_TXT[res[0]]}), {res[3]} вакансий")
+    return head + "\n" + "\n".join(f"№{r['message_id']} — {money(int(v))} ₽" + (" · новичок" if is_entry(r) else "")
+                                    for v, r in vals[:40])

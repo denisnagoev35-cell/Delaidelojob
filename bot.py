@@ -639,6 +639,9 @@ def on_admin(con, msg, text):
     if cmd == "/zp":
         send(chat, ZP.table(con))
         return
+    if cmd == "/zp_why":   # /zp_why kalyan 1to3 — из каких вакансий посчитана вилка
+        send(chat, ZP.why(con, args[0] if args else "kalyan", args[1] if len(args) > 1 else "1to3"))
+        return
     if cmd == "/podbor":
         uid = msg["from"]["id"]
         st = pb_get(con, uid)

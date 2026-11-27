@@ -215,13 +215,65 @@ POST_IDS = {int(x) for x in os.environ.get("POST_IDS", "703473452").replace(" ",
 
 
 # ---------- обложки ----------
-# Обложки хранятся в базе как file_id Telegram: добавить — прислать боту картинку с подписью
-# «/oblozhka Кальянщик тёмная». Профессия по названию определяется сама — такую обложку бот предложит первой.
+# Встроенные обложки — папка covers/ (ставятся сами по профессии). Свои — картинка с подписью
+# «/oblozhka Кальянщик тёмная» (хранится как file_id; профессия по названию — для неё своя важнее встроенной).
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS post_covers(
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, prof TEXT, file_id TEXT, added INTEGER);
 """
+
+
+COVER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "covers")
+# Встроенные обложки (папка covers/): файл, название, профессия, слово в начале вакансии (важнее профессии)
+BUILTIN = [
+    ("01_kalyanshik.jpg", "Кальянщик", "kalyan", None),
+    ("02_barista.jpg", "Бариста", "barista", None),
+    ("03_barmen.jpg", "Бармен", "bar", None),
+    ("04_oficiant.jpg", "Официант", "waiter", None),
+    ("05_povar.jpg", "Повар", "cook", None),
+    ("06_kurier.jpg", "Курьер", "courier", None),
+    ("07_hostes.jpg", "Хостес", "hostess", None),
+    ("08_administrator.jpg", "Администратор", None, r"администратор|\bадмин\b"),
+    ("09_menedzher.jpg", "Менеджер", None, r"\bменеджер(?!у)|управляющ"),
+    ("10_vakansiya.jpg", "Вакансия (общая)", None, None),
+]
+DEFAULT_COVER = "10_vakansiya.jpg"
+_seeded = set()
+
+
+def seed(con):
+    """Колонки для встроенных обложек и сами обложки из covers/ (file_id появится после первой загрузки)."""
+    if id(con) in _seeded:
+        return
+    cols = {r[1] for r in con.execute("PRAGMA table_info(post_covers)")}
+    for c, typ in (("path", "TEXT"), ("kw", "TEXT"), ("hidden", "INTEGER DEFAULT 0")):
+        if c not in cols:
+            con.execute(f"ALTER TABLE post_covers ADD COLUMN {c} {typ}")
+    for f, name, prof, kw in BUILTIN:
+        if not os.path.exists(os.path.join(COVER_DIR, f)):
+            continue
+        if not con.execute("SELECT 1 FROM post_covers WHERE path=?", (f,)).fetchone():
+            con.execute("INSERT INTO post_covers(name, prof, path, kw, added) VALUES(?,?,?,?,?)",
+                        (name, prof, f, kw, int(time.time())))
+    con.commit()
+    _seeded.add(id(con))
+
+
+def pick_cover(con, text, prof):
+    """Автовыбор: слово в начале вакансии (администратор, менеджер) → профессия → общая «Вакансия»."""
+    seed(con)
+    rows = [r for r in con.execute("SELECT * FROM post_covers WHERE hidden=0 ORDER BY id")]
+    head = "\n".join((text or "").splitlines()[:3]).lower()
+    for r in rows:
+        if r["kw"] and re.search(r["kw"], head, re.I):
+            return r["id"]
+    if prof:
+        own = [r for r in rows if r["prof"] == prof]
+        if own:
+            return own[-1]["id"] if not own[-1]["path"] else own[0]["id"]   # своя загруженная — важнее встроенной
+    gen = [r for r in rows if r["path"] == DEFAULT_COVER]
+    return gen[0]["id"] if gen else None
 
 
 def _prof_of(name):
@@ -230,7 +282,8 @@ def _prof_of(name):
 
 
 def covers(con, prof=None):
-    rows = con.execute("SELECT * FROM post_covers ORDER BY id").fetchall()
+    seed(con)
+    rows = con.execute("SELECT * FROM post_covers WHERE hidden=0 ORDER BY id").fetchall()
     return sorted(rows, key=lambda r: (r["prof"] != prof, r["id"])) if prof else list(rows)
 
 
@@ -272,19 +325,67 @@ def _cover_label(con, d):
 
 
 def _cover_file(con, d):
+    """Что ставить фото: file_id фото из исходника, «cover:<id>» из списка или None."""
     c = d.get("cover")
     if c == "src":
         return d.get("photo")
-    if c:
-        r = con.execute("SELECT file_id FROM post_covers WHERE id=?", (c,)).fetchone()
-        return r["file_id"] if r else None
+    if c and con.execute("SELECT 1 FROM post_covers WHERE id=?", (c,)).fetchone():
+        return f"cover:{c}"
     return None
+
+
+def _upload(chat, path, caption, markup):
+    """sendPhoto файлом с диска (multipart), с подписью и кнопками."""
+    import uuid
+    with open(path, "rb") as f:
+        data = f.read()
+    bd = "----ddpost" + uuid.uuid4().hex
+    fields = {"chat_id": str(chat), "caption": caption, "parse_mode": "HTML"}
+    if markup:
+        fields["reply_markup"] = json.dumps(markup, ensure_ascii=False)
+    body = b"".join(f"--{bd}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+                    for k, v in fields.items())
+    body += (f"--{bd}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"cover.jpg\"\r\n"
+             f"Content-Type: image/jpeg\r\n\r\n").encode() + data + f"\r\n--{bd}--\r\n".encode()
+    c = B.FastHTTPS("api.telegram.org", timeout=60)
+    try:
+        c.request("POST", f"/bot{B.TOKEN}/sendPhoto", body=body,
+                  headers={"Content-Type": f"multipart/form-data; boundary={bd}"})
+        res = json.loads(c.getresponse().read().decode())
+    except Exception as e:
+        raise B.TgError(f"sendPhoto(upload): {e.__class__.__name__}: {e}")
+    finally:
+        c.close()
+    if not res.get("ok"):
+        raise B.TgError(f"sendPhoto(upload): {res.get('description')}")
+    return res["result"]
+
+
+def send_photo(con, chat, ref, caption, markup=None):
+    """Фото по ссылке _cover_file(): встроенная обложка грузится с диска один раз, дальше — по file_id."""
+    if not str(ref).startswith("cover:"):
+        return B.tg("sendPhoto", chat_id=chat, photo=ref, caption=caption, parse_mode="HTML", reply_markup=markup)
+    r = con.execute("SELECT * FROM post_covers WHERE id=?", (int(ref[6:]),)).fetchone()
+    if not r:
+        raise B.TgError("обложка удалена")
+    if r["file_id"]:
+        try:
+            return B.tg("sendPhoto", chat_id=chat, photo=r["file_id"], caption=caption, parse_mode="HTML",
+                        reply_markup=markup)
+        except B.TgError:
+            if not r["path"]:
+                raise
+    m = _upload(chat, os.path.join(COVER_DIR, r["path"]), caption, markup)
+    con.execute("UPDATE post_covers SET file_id=? WHERE id=?", (m["photo"][-1]["file_id"], r["id"]))
+    con.commit()
+    return m
 
 
 def cover_kb(con, d):
     rows = []
-    for r in covers(con, d.get("prof"))[:24]:
-        mark = "✅ " if d.get("cover") == r["id"] else ("⭐ " if r["prof"] and r["prof"] == d.get("prof") else "")
+    sug = d.get("suggest")
+    for r in sorted(covers(con), key=lambda r: r["id"] != sug)[:24]:
+        mark = "✅ " if d.get("cover") == r["id"] else ("⭐ " if r["id"] == sug else "")
         rows.append((mark + r["name"], f"po:cset:{r['id']}"))
     out = [rows[i:i + 2] for i in range(0, len(rows), 2)]
     if d.get("photo"):
@@ -299,7 +400,7 @@ def cover_kb(con, d):
 def _kb(con, d):
     return B.kb([[("✅ Опубликовать", "po:pub"), ("🕒 Запланировать", "po:sched")],
                  [("🔁 Переписать ещё", "po:redo"), ("✏️ Исправить", "po:edit")],
-                 [(f"🖼 Обложка: {_cover_label(con, d)}"[:60], "po:cover")],
+                 [(("🖼 Обложки" if not d.get("cover") else f"🖼 Обложка: {_cover_label(con, d)}")[:60], "po:cover")],
                  [("❌ Отмена", "po:cancel")]])
 
 
@@ -322,8 +423,7 @@ def preview(con, uid, chat):
     fid = _cover_file(con, d)
     if fid and len(text) <= CAPTION_MAX:
         try:
-            B.tg("sendPhoto", chat_id=chat, photo=fid, caption=html.escape(text), parse_mode="HTML",
-                 reply_markup=_kb(con, d))
+            send_photo(con, chat, fid, html.escape(text), _kb(con, d))
             return
         except B.TgError as e:
             log.warning("posting preview photo: %s", e)
@@ -347,12 +447,11 @@ def start(con, msg):
     skip = [src_user, B.channel_username() or "", B.BOT_USERNAME, "delaijobchat"]
     tags = hashtags(raw, B.post_tags(raw))
     prof = next((k for k, t in B.PROF_TAGS.items() if t in tags), None)
-    first = covers(con, prof)
     d = {"src": raw, "src_user": src_user, "src_title": src_title,
          "photo": (msg.get("photo") or [{}])[-1].get("file_id"), "prof": prof, "tags": tags,
          "contacts": contacts(raw, skip),
-         # по умолчанию — обложка этой профессии, если есть
-         "cover": first[0]["id"] if first and prof and first[0]["prof"] == prof else None}
+         # обложку выбирают кнопкой; подходящая (администратор/менеджер по тексту → профессия → общая) — ⭐ первой
+         "cover": None, "suggest": pick_cover(con, raw, prof)}
     B.send(chat, "✍️ Переписываю…")
     _rewrite(con, uid, d)
     preview(con, uid, chat)
@@ -396,7 +495,8 @@ def callback(con, uid, chat, mid, data):
     parts = data.split(":")
     act = parts[1] if len(parts) > 1 else ""
     if act == "cdel":
-        con.execute("DELETE FROM post_covers WHERE id=?", (int(parts[2]),))
+        con.execute("UPDATE post_covers SET hidden=1 WHERE id=? AND path IS NOT NULL", (int(parts[2]),))
+        con.execute("DELETE FROM post_covers WHERE id=? AND path IS NULL", (int(parts[2]),))
         con.commit()
         B.send(chat, "🗑 Обложка удалена.")
         list_covers(con, chat)
@@ -470,9 +570,9 @@ def callback(con, uid, chat, mid, data):
         publish(con, uid, chat, mid, d)
 
 
-def _to_channel(text, fid):
+def _to_channel(con, text, fid):
     if fid:
-        return B.tg("sendPhoto", chat_id=B.CHANNEL, photo=fid, caption=html.escape(text), parse_mode="HTML")
+        return send_photo(con, B.CHANNEL, fid, html.escape(text))
     return B.tg("sendMessage", chat_id=B.CHANNEL, text=html.escape(text), parse_mode="HTML",
                 disable_web_page_preview=True)
 
@@ -512,7 +612,7 @@ def publish(con, uid, chat, mid, d):
     if not _check_len(con, chat, d):
         return
     try:
-        m = _to_channel(d.get("text", ""), _cover_file(con, d))
+        m = _to_channel(con, d.get("text", ""), _cover_file(con, d))
     except B.TgError as e:
         B.send(chat, f"❌ Не опубликовал: {html.escape(str(e))}")
         return
@@ -680,8 +780,7 @@ def queue_one(con, chat, qid):
     head = f"🕒 <b>{fmt_at(r['at'])}</b>\n\n"
     if r["file_id"] and len(head) + len(r["text"]) <= CAPTION_MAX:
         try:
-            B.tg("sendPhoto", chat_id=chat, photo=r["file_id"], caption=head + html.escape(r["text"]),
-                 parse_mode="HTML", reply_markup=kbd)
+            send_photo(con, chat, r["file_id"], head + html.escape(r["text"]), kbd)
             return
         except B.TgError:
             pass
@@ -690,7 +789,7 @@ def queue_one(con, chat, qid):
 
 def _publish_q(con, r):
     try:
-        m = _to_channel(r["text"], r["file_id"])
+        m = _to_channel(con, r["text"], r["file_id"])
     except B.TgError as e:
         con.execute("UPDATE post_queue SET status='error', err=? WHERE id=?", (str(e)[:300], r["id"]))
         con.commit()
@@ -741,8 +840,8 @@ HELP = ("📝 <b>Посты через бота</b>\n\n"
         "исправить вручную, выбрать обложку. В канал уходит только по кнопке «✅ Опубликовать» "
         "или в назначенное время через «🕒 Запланировать».\n\n"
         "🕒 <code>/ochered</code> — запланированные посты: посмотреть, перенести, выпустить сейчас, убрать.\n\n"
-        "🖼 Обложки: пришли картинку с подписью <code>/oblozhka Кальянщик тёмная</code> — добавится в список "
-        "(если в названии есть профессия, для её вакансий будет предлагаться первой). "
+        "🖼 Обложка: под превью кнопка «🖼 Обложки» — выбери из наших (подходящая отмечена ⭐), фото из исходника "
+        "или без обложки. Свою добавить — картинка с подписью <code>/oblozhka Название</code>. "
         "<code>/oblozhki</code> — список и удаление.")
 
 

@@ -649,10 +649,31 @@ def start(con, msg):
     return True
 
 
+NOEXP_RE = re.compile(r"опыт\w*\s+(?:работы\s+)?не\s+(?:обязател|нуж|требу|важ)|без\s+опыта|#безопыта", re.I)
+TEACH_RE = re.compile(r"научим|обучим|всему науч|обучение\s+с\s+нуля|с\s+нуля", re.I)
+HAS_NOEXP_RE = re.compile(r"опыт\w*\s+не|без\s+опыта|науч|обуч|с\s+нуля", re.I)
+
+
+def ensure_noexp(g, src):
+    """Если в исходнике «опыт не нужен / научим», а нейросеть это потеряла — ставим первым требованием."""
+    note = "научим с нуля" if TEACH_RE.search(src) else ("опыт не обязателен" if NOEXP_RE.search(src) else None)
+    pos = [p for p in g.get("positions", []) if isinstance(p, dict)]
+    if not note or not pos:
+        return g
+    for p in pos:
+        req = p.get("requirements") if isinstance(p.get("requirements"), list) else []
+        have = any(isinstance(x, str) and HAS_NOEXP_RE.search(x) for x in req + (p.get("details") or []))
+        if not have and len(pos) == 1:   # несколько должностей — не знаем, к какой относится
+            p["requirements"] = [note] + [x for x in req if isinstance(x, str)]
+    return g
+
+
 def _rewrite(con, uid, d):
     skip = [d.get("src_user"), B.channel_username() or ""]
     base = clean(d["src"], skip)
     g = gpt_rewrite(base)
+    if g:
+        g = ensure_noexp(g, base)
     d["by"] = "gpt" if g else "raw"
     if g:   # с запасом под обложку (1024): лишние подробности срезаются с конца
         titles = "\n".join(_s(p.get("title")) for p in g.get("positions", []) if isinstance(p, dict))

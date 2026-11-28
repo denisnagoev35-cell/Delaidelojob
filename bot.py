@@ -631,10 +631,50 @@ UNIT_WORDS = {"смена": "shift", "смену": "shift", "выход": "shift
               "мес": "month", "месяц": "month"}
 
 
+ADMIN_HELP = (
+    "🛠 <b>Команды админа</b>\n\n"
+    "📝 <b>Посты</b>\n"
+    "Перешли вакансию или вставь текст — бот соберёт пост, в канал только по кнопке.\n"
+    "/post — как работают посты через бота\n"
+    "/ochered — запланированные посты: перенести, выпустить, убрать\n"
+    "/raw N — что бот сохранил под постом №N\n"
+    "/delpost N — убрать из базы пост, удалённый из канала\n\n"
+    "💰 <b>Зарплаты</b>\n"
+    "/zp — таблица зарплат по живым вакансиям\n"
+    "/zp_why проф ступень — из каких постов зарплата (<code>/zp_why kalyan 1to3</code>)\n"
+    "/zp_post — индекс зарплат: превью, в канал по кнопке\n"
+    "/zp_push — отправить zp.json для сайта сейчас\n"
+    "<i>проф: kalyan bar waiter cook hostess barista staff · ступень: none lt1 1to3 gt3</i>\n\n"
+    "🔎 <b>Разбор вакансий</b>\n"
+    "/vac N — как бот разобрал пост №N\n"
+    "/mesto N Город — поправить место (<code>/mesto 65 Химки</code>)\n"
+    "/stavka N сумма ед — поправить ставку (<code>/stavka 65 4000-6000 смена</code>)\n"
+    "/reparse [дни] — переразобрать посты за 14 дней (или за указанные)\n\n"
+    "🔔 <b>Подборка и рассылка</b>\n"
+    "/podbor — подборка вакансий (тест)\n"
+    "/rass — подписки на новые вакансии и очередь\n"
+    "/testrass — показать себе рассылку, как её видит соискатель\n\n"
+    "📰 <b>Дайджест</b>\n"
+    "/digest — превью дайджеста (сам выходит по понедельникам в 15:00)\n"
+    "/digest_pin N — записать закреплённый дайджест (бот открепит его при выходе следующего)\n\n"
+    "📋 <b>Анкеты</b>\n"
+    "/anketa — пройти анкету соискателя\n"
+    "/anketas — последние анкеты\n"
+    "/anketa_pin — сообщение с кнопкой для закрепа в чате\n"
+    "/kandidaty — анкеты глазами работодателя\n"
+    "/empsubs — подписки работодателей\n\n"
+    "📊 /stats — статистика бота\n"
+    "❓ /help — этот список"
+)
+
+
 def on_admin(con, msg, text):
     chat = msg["chat"]["id"]
     cmd, *args = text.split()
     cmd = cmd.split("@")[0].lower()
+    if cmd == "/help":
+        send(chat, ADMIN_HELP)
+        return
     if cmd == "/delpost":   # пост удалили из канала — убираем из базы (подборка, дайджест, /zp, рассылка)
         n = int(args[0]) if args and args[0].isdigit() else 0
         c1 = con.execute("DELETE FROM posts WHERE message_id=?", (n,)).rowcount
@@ -767,8 +807,7 @@ def on_admin(con, msg, text):
         lines.append("Посмотреть пост: /vac 65 · поправить: /mesto 65 Химки, /stavka 65 4000-6000 смена")
         send(chat, "\n".join(lines))
     else:
-        send(chat, "Команды: /podbor · /testrass · /rass · /reparse · /vac N · /mesto N Город · "
-                   "/stavka N 4000-6000 смена · /anketa · /anketas · /anketa_pin · /kandidaty · /empsubs · /digest · /digest_pin N · /post · /ochered · /zp_post · /raw N · /delpost N")
+        send(chat, "Не знаю такую команду. Все команды — /help")
 
 
 def pb_get(con, uid):

@@ -64,7 +64,9 @@ def waiting_edit(con, uid):
 
 TG_LINK_RE = re.compile(r"(?:https?://)?t\.me/(\+?[A-Za-z0-9_]+)", re.I)
 NICK_RE = re.compile(r"(?<![\w.])@([A-Za-z0-9_]{4,32})")
-PHONE_RE = re.compile(r"(?:(?:\+7|8)[\s\-(]*)?\(?9\d{2}\)?[\s\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}(?!\d)")
+# мобильные (9xx, можно без +7/8) и городские с +7/8 (495, 499, 498…)
+PHONE_RE = re.compile(r"(?<!\d)(?:(?:\+7|8)[\s\-(]*\(?\d{3}\)?|\(?9\d{2}\)?)[\s\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}(?!\d)")
+TG_SERVICE = {"joinchat", "addlist", "addstickers", "addemoji", "share", "proxy", "socks", "iv", "boost", "c", "s"}
 MAIL_RE = re.compile(r"[\w.\-]+@[\w\-]+\.[A-Za-z.]{2,}")
 WA_RE = re.compile(r"(?:https?://)?wa\.me/\+?\d+", re.I)
 # строки-«подвалы» чужих каналов
@@ -83,10 +85,10 @@ def source_of(msg):
 def contacts(text, skip=()):
     """Телефоны, почта, WhatsApp и @ники/ссылки на людей. Ник канала-источника и наш — пропускаем."""
     skip = {s.lower() for s in skip if s}
-    out = []
+    out, bots = [], []
 
     def add(x):
-        if x and x not in out:
+        if x and x.lower() not in {o.lower() for o in out}:
             out.append(x)
 
     for m in PHONE_RE.finditer(text):
@@ -97,9 +99,16 @@ def contacts(text, skip=()):
         add(m.group(0))
     for m in list(NICK_RE.finditer(text)) + list(TG_LINK_RE.finditer(text)):
         nick = m.group(1)
-        if nick.startswith("+") or nick.lower() in skip or nick.lower().endswith("bot"):
-            continue   # инвайт-ссылки, источник, боты
+        if nick.startswith("+") or nick.lower() in skip or nick.lower() in TG_SERVICE or len(nick) < 4 \
+                or re.match(r"/\d", text[m.end():m.end() + 2]):
+            continue   # инвайт-ссылки, источник, служебные t.me/joinchat, t.me/c/…, ссылки на посты
+        if nick.lower().endswith("bot"):
+            bots.append("@" + nick)   # бот-отклик — только если других контактов нет
+            continue
         add("@" + nick)
+    if not out:
+        for b in bots:
+            add(b)
     return out
 
 
@@ -415,8 +424,8 @@ def _same(x, hl):
 
 
 def plain_len(h):
-    """Длина так, как её считает Telegram (без тегов)."""
-    return len(html.unescape(re.sub(r"<[^>]+>", "", h or "")))
+    """Длина так, как её считает Telegram (без тегов, в UTF-16: эмодзи — 2 и больше)."""
+    return len(html.unescape(re.sub(r"<[^>]+>", "", h or "")).encode("utf-16-le")) // 2
 
 
 def render_fit(g, tags, conts, limit=1000):

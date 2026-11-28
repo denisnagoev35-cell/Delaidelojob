@@ -656,6 +656,17 @@ def on_admin(con, msg, text):
     if cmd == "/zp":
         send(chat, ZP.table(con))
         return
+    if cmd == "/zp_push":   # отправить zp.json на GitHub сейчас (не ждать суток)
+        try:
+            ok = ZP.gh_push(ZP.export_data(con))
+            con.execute("INSERT OR REPLACE INTO state(key, value) VALUES('zp_gh', ?)", (str(time.time()),))
+            con.commit()
+            send(chat, "✅ zp.json отправлен на GitHub. Через 1–2 минуты будет на Pages." if ok else
+                       "⚠️ Не заданы GH_ZP_REPO / GH_ZP_TOKEN в /etc/ddbot.env.")
+        except Exception as e:
+            send(chat, f"❌ {html.escape(str(e))}\n403 — у ключа нет права Contents: Read and write на этот репозиторий; "
+                       f"401 — ключ неверный или отозван; 404 — неверное имя репозитория.")
+        return
     if cmd == "/zp_why":   # /zp_why kalyan 1to3 — из каких вакансий посчитана вилка
         send(chat, ZP.why(con, args[0] if args else "kalyan", args[1] if len(args) > 1 else "1to3"))
         return

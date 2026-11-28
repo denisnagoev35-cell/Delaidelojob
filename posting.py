@@ -377,12 +377,30 @@ def render(g, tags, conts, cut=0):
     return "\n".join(lines)
 
 
+TAIL_WORDS = {"и", "а", "в", "во", "на", "с", "со", "к", "ко", "у", "о", "об", "от", "до", "по", "за", "из", "для",
+              "при", "без", "под", "над", "через", "после", "или", "но", "же", "не", "а также", "также", "что",
+              "как", "если", "чем", "до", "между", "около", "весь", "всю", "все", "каждую", "каждый"}
+
+
+def short_hl(x, limit=34):
+    """Фишку короче limit — по целым словам и без висячего хвоста: «…такси при вечерней смене» → «…такси»."""
+    x = x.rstrip("…").strip(" ,;—-")
+    if len(x) <= limit:
+        return x
+    w = x.split()
+    while w and len(" ".join(w)) > limit:
+        w.pop()
+    while w and (w[-1].lower().strip(",;:—-") in TAIL_WORDS or len(w[-1]) <= 1):
+        w.pop()
+    return " ".join(w).strip(" ,;—-") if len(w) >= 2 else ""
+
+
 def highlights(g, pos):
     """Фишка: 1–2 коротких плюса от нейросети; без денег и графика, итог ≤ 50 знаков."""
     pays = " ".join(_s(p.get("pay"), 400) + " " + _s(p.get("schedule"), 400) for p in pos)
     out = []
-    for x in _list(g.get("highlight"), 3, 34):
-        if "₽" in x or re.search(r"\d\s*/\s*\d|\d{1,2}:\d{2}|^\W*(?:график|смены?\b)|за\s+смену", x, re.I) or _dup(x, pays) or \
+    for x in (short_hl(y) for y in _list(g.get("highlight"), 3, 120)):
+        if not x or "₽" in x or re.search(r"\d\s*/\s*\d|\d{1,2}:\d{2}|^\W*(?:график|смены?\b)|за\s+смену", x, re.I) or _dup(x, pays) or \
                 any(_dup(x, y) for y in out):
             continue
         if len(" · ".join(out + [x])) > 50:

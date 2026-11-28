@@ -285,3 +285,53 @@ def export_tick(con):
     export(con)
     con.execute("INSERT OR REPLACE INTO state(key, value) VALUES('zp_export', ?)", (str(time.time()),))
     con.commit()
+
+
+# ---------- публикация на GitHub Pages (репозиторий данных, отдельный от сайта и бота) ----------
+# GH_ZP_REPO=owner/repo, GH_ZP_TOKEN — fine-grained token только к этому репозиторию (Contents: RW).
+# Раз в сутки кладём zp.json в корень; сайт /zarplata/ читает https://<owner>.github.io/<repo>/zp.json.
+GH_REPO = os.environ.get("GH_ZP_REPO", "").strip()
+GH_TOKEN = os.environ.get("GH_ZP_TOKEN", "").strip()
+GH_EVERY = 24 * 3600
+
+
+def _gh(method, path, body=None):
+    import json, urllib.request
+    req = urllib.request.Request(f"https://api.github.com{path}", method=method,
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json",
+                                          "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "ddbot-zp"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+
+
+def gh_push(data):
+    """PUT zp.json в репозиторий данных. → True, если записали."""
+    import json, base64
+    if not (GH_REPO and GH_TOKEN):
+        return False
+    path = f"/repos/{GH_REPO}/contents/zp.json"
+    st, cur = _gh("GET", path)
+    body = {"message": "zp.json: зарплаты по вакансиям канала",
+            "content": base64.b64encode(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()).decode()}
+    if st == 200 and cur.get("sha"):
+        body["sha"] = cur["sha"]
+    st, _ = _gh("PUT", path, body)
+    if st not in (200, 201):
+        raise RuntimeError(f"GitHub PUT zp.json: HTTP {st}")
+    return True
+
+
+def gh_tick(con):
+    if MODE != "on" or not (GH_REPO and GH_TOKEN):
+        return
+    r = con.execute("SELECT value FROM state WHERE key='zp_gh'").fetchone()
+    if r and time.time() - float(r[0]) < GH_EVERY:
+        return
+    # отметку ставим до отправки: при ошибке повторим через сутки, а не каждые 25 с
+    con.execute("INSERT OR REPLACE INTO state(key, value) VALUES('zp_gh', ?)", (str(time.time()),))
+    con.commit()
+    gh_push(export_data(con))

@@ -1299,6 +1299,10 @@ def main():
             ZP.export_tick(con)
         except Exception:
             log.exception("zp export failed")
+        try:
+            ZP.gh_tick(con)
+        except Exception:
+            log.exception("zp github push failed")
         for upd in updates:
             offset = upd["update_id"] + 1
             try:

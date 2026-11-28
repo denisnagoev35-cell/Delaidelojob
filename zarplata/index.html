@@ -204,7 +204,7 @@ render();
 (function(){
   if(!window.fetch)return;
   var ctl=window.AbortController?new AbortController():null, t=setTimeout(function(){if(ctl)ctl.abort();},3000);
-  fetch("https://24delaidelo.ru/api/zp.json",{cache:"no-store",signal:ctl?ctl.signal:undefined}).then(function(r){return r.ok?r.json():null;}).then(function(j){
+  fetch("https://denisnagoev35-cell.github.io/delaidelojob-data/zp.json",{cache:"no-store",signal:ctl?ctl.signal:undefined}).then(function(r){return r.ok?r.json():null;}).then(function(j){
     clearTimeout(t);
     if(!j||!j.profs||!j.updated||Date.now()/1000-j.updated>7*86400)return;   // старше недели — не доверяем
     var d=new Date(j.updated*1000), dd=("0"+d.getDate()).slice(-2)+"."+("0"+(d.getMonth()+1)).slice(-2);

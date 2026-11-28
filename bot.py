@@ -42,6 +42,9 @@ CLOSED_RE = re.compile(r"\bзакрыт[аоы]?\b|неактуальн|набо
 def is_closed(text):
     return 1 if CLOSED_RE.search((text or "")[:200]) else 0
 SOURCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# С сайта /zarplata/: к метке источника дописаны профессия и опыт — «ya_123-kalyan-1to3», «vk_ads_bot-bar-none».
+# Бот не спрашивает их заново: остаётся выбрать район, и сразу результат.
+PRESET_RE = re.compile(r"^(.*)-([a-z]+)-(none|lt1|1to3|gt3)$")
 
 
 # ---------- Telegram API ----------
@@ -411,6 +414,10 @@ def on_start(con, msg):
     uid = msg["from"]["id"]
     parts = (msg.get("text") or "").split(maxsplit=1)
     payload = parts[1] if len(parts) > 1 else ""
+    preset = None
+    m = PRESET_RE.match(payload)
+    if m and m.group(2) in T.PROFESSIONS:
+        payload, preset = m.group(1), (m.group(2), m.group(3))
     src, ym_cid = YM.parse(payload)   # ya_<ClientID Метрики> → ya_direct
     source = src if SOURCE_RE.match(src or "") else None
     touch_user(con, uid, source)
@@ -433,6 +440,16 @@ def on_start(con, msg):
             return
         AN.st_set(con, f"an:{uid}", None)   # /start посреди анкеты — начинаем с чистого листа
         AN.st_set(con, f"ac:{uid}", None)
+    if preset:   # профессия и опыт уже выбраны на сайте — один вопрос про район
+        prof, exp = preset
+        p = T.PROFESSIONS[prof]
+        set_user(con, uid, profession=prof, exp=exp)
+        event(con, uid, "profession", prof)
+        event(con, uid, "preset", f"{prof}:{exp}")
+        send(chat, f"{p['emoji']} <b>{p['name']}</b> · опыт: {T.EXPERIENCE[exp].lower()}\n\n"
+                   f"Осталось одно — {T.ASK_REGION[2:].lower()}",
+             kb([[(name, f"e:{prof}:{k}:{exp}") for k, name in T.REGIONS.items()]]))
+        return
     send(chat, welcome(con, uid), professions_kb(uid))
 
 
@@ -529,7 +546,7 @@ def on_callback(con, cq):
     elif data.startswith("e:"):
         _, prof, reg, exp = (data.split(":") + ["", "", "", ""])[:4]
         if prof in T.PROFESSIONS and reg in T.REGIONS and exp in T.EXPERIENCE:
-            set_user(con, uid, exp=exp)
+            set_user(con, uid, exp=exp, region=reg)
             event(con, uid, "result", f"{prof}:{reg}:{exp}")
             edit(chat_id, mid, result_text(prof, reg, exp, con, uid),
                  kb([[("🔓 Открыть полный разбор", f"f:{prof}")],

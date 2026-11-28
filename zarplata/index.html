@@ -57,11 +57,16 @@ h1 em{color:var(--y);font-style:italic;display:block}
 .blur{filter:blur(9px);user-select:none;-webkit-user-select:none}
 .lock{display:inline-block;margin-left:4px;font-size:11px}
 .r-lock{font-size:14.5px;line-height:1.5;color:#fff;font-weight:700;margin-top:8px!important}
+.live{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#E6E6E6;background:#151515;border:1px solid #2A2A2A;border-radius:999px;padding:7px 12px;margin:0 0 18px}
+.live i{width:8px;height:8px;border-radius:50%;background:#3DDC84;box-shadow:0 0 0 0 rgba(61,220,132,.6);animation:dot 2s infinite}
+@keyframes dot{70%{box-shadow:0 0 0 7px rgba(61,220,132,0)}100%{box-shadow:0 0 0 0 rgba(61,220,132,0)}}
+.result.pop{animation:pop .35s ease-out}
+@keyframes pop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .hint{font-size:13px;color:#fff;font-weight:700;text-align:center;margin:8px 2px 0}
 .note{font-size:13px;color:var(--mut);line-height:1.45;margin:10px 2px 0;text-align:center}
 footer{margin-top:28px;color:#6F6F6F;font-size:12px;line-height:1.6;text-align:center}
 footer a{color:#9A9A9A}
-@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 <!-- Yandex.Metrika counter -->
 <script type="text/javascript">
@@ -116,6 +121,7 @@ function ddGo(ev, a, g){
 
   <h1>Сколько тебе <em>должны платить?</em></h1>
   <p class="lead">Покажем, сколько платят за смену в барах, кафе и кальянных Москвы и МО — по реальным вакансиям.</p>
+  <p class="live" id="live" hidden><i></i><span id="live-t"></span></p>
 
   <p class="step"><i>1</i> Нажми на свою профессию 👇</p>
 
@@ -178,9 +184,12 @@ function render(){
   [].forEach.call(pb.children,function(b){b.setAttribute("aria-pressed",b.dataset.id===cur.p?"true":"false")});
   [].forEach.call(eb.children,function(b){b.setAttribute("aria-pressed",b.dataset.id===cur.e?"true":"false")});
   if(!cur.p)return;
-  var p=P.filter(function(x){return x[0]===cur.p})[0];
-  document.getElementById("result").hidden=false; eb.classList.add("on"); pb.classList.remove("hint");
-  document.getElementById("step-exp").classList.add("on"); document.getElementById("cta").hidden=false;
+  var p=P.filter(function(x){return x[0]===cur.p})[0], noexp=p[0]==="staff";   // хозу опыт не важен — ставка одна
+  if(noexp)cur.e="none";
+  var res=document.getElementById("result"), first=res.hidden||res.dataset.p!==cur.p;
+  res.hidden=false; res.dataset.p=cur.p; pb.classList.remove("hint");
+  eb.classList.toggle("on",!noexp); document.getElementById("step-exp").classList.toggle("on",!noexp);
+  document.getElementById("cta").hidden=false;
   document.getElementById("r-name").textContent=p[1]+" "+p[2];
   botHref();
   var s=(p[7]&&p[7][cur.e])||[p[3],p[4]];
@@ -192,13 +201,29 @@ function render(){
     note.textContent="🔒 Зарплату для опыта "+EXPN[cur.e]+" бот посчитает по свежим вакансиям канала за последние 30 дней.";
     document.getElementById("bot-label").textContent="Узнать зарплату в боте — бесплатно";
   }else{
-    document.getElementById("r-sum").innerHTML=s[0]+' <small>'+s[1]+'</small>';
+    document.getElementById("r-sum").innerHTML='<span id="r-num">'+s[0]+'</span> <small>'+s[1]+'</small>';
+    if(first)countUp(document.getElementById("r-num"),s[0]);
     document.getElementById("r-src").textContent=p[5];
     note.className="r-note";
     note.textContent=p[6][cur.e]||EN[cur.e];
     document.getElementById("bot-label").textContent="Получить полный разбор в боте";
   }
 }
+// Сумма «набегает» за полсекунды при выборе профессии.
+function countUp(el,txt){
+  if(!window.requestAnimationFrame||(window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches))return;
+  var re=/\d{1,3}(?: \d{3})+|\d+/g, nums=(txt.match(re)||[]).map(function(x){return +x.replace(/ /g,"")}), t0=null;
+  if(!nums.length)return;
+  function fmt(n){return String(n).replace(/\B(?=(\d{3})+(?!\d))/g," ");}
+  function step(t){t0=t0||t;var k=Math.min(1,(t-t0)/600),e=1-Math.pow(1-k,3),i=0;
+    el.textContent=txt.replace(re,function(){var n=nums[i++];return fmt(k<1?Math.round(n*e/50)*50||0:n);});
+    if(k<1)requestAnimationFrame(step);}
+  requestAnimationFrame(step);
+}
+// После выбора профессии — плавно к результату, если он ниже экрана.
+pb.addEventListener("click",function(){setTimeout(function(){var r=document.getElementById("result");
+  if(r.getBoundingClientRect().bottom>window.innerHeight)r.scrollIntoView({behavior:"smooth",block:"center"});
+  r.classList.remove("pop");void r.offsetWidth;r.classList.add("pop");},30);});
 render();
 // Живые цифры — те же, что считает бот (выгрузка раз в 6 часов). Нет ответа за 3 с — остаются вшитые.
 (function(){
@@ -215,6 +240,7 @@ render();
       p[5]="по вакансиям канала за "+(j.days||30)+" дней · обновлено "+dd;
     });
     var f=document.getElementById("f-src");
+    if(j.vacancies){var n=+j.vacancies,w=n%10==1&&n%100!=11?"свежая вакансия":n%10>=2&&n%10<=4&&(n%100<10||n%100>=20)?"свежие вакансии":"свежих вакансий";document.getElementById("live-t").textContent=n+" "+w+" за "+(j.days||30)+" дней";document.getElementById("live").hidden=false;}
     if(f)f.textContent="Цифры — по "+(j.vacancies||"")+" вакансиям канала @delaidelojob за последние "+(j.days||30)+" дней, обновлено "+dd+".";
     render();
   }).catch(function(){});

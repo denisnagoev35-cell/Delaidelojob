@@ -1295,6 +1295,10 @@ def main():
             PO.tick(con)
         except Exception:
             log.exception("posting tick failed")
+        try:
+            ZP.export_tick(con)
+        except Exception:
+            log.exception("zp export failed")
         for upd in updates:
             offset = upd["update_id"] + 1
             try:

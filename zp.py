@@ -6,7 +6,8 @@
 ZP_MODE: on — всем; test (по умолчанию) — живые цифры видят только админы; off — выключено.
 Админу: /zp — таблица по всем профессиям.
 """
-import os, re, time
+import os
+import re, time
 
 MODE = os.environ.get("ZP_MODE", "test").strip().lower()
 DAYS = 30
@@ -234,3 +235,53 @@ def why(con, prof, exp="1to3", region=None):
             f"{money(res[1])}–{money(res[2])} ({UNIT_TXT[res[0]]}), {res[3]} вакансий")
     return head + "\n" + "\n".join(f"№{r['message_id']} — {money(int(v))} ₽" + (" · новичок" if is_entry(r) else "")
                                     for v, r in vals[:40])
+
+
+# ---------- выгрузка для сайта /zarplata/ ----------
+# Тот же расчёт, что в боте, — в файл, который отдаёт веб-сервер (24delaidelo.ru/api/zp.json).
+# Сайт берёт цифры оттуда; файла нет — показывает вшитые.
+EXPORT_PATH = os.environ.get("ZP_EXPORT", "/opt/ddbot/data/pub/zp.json")
+EXPORT_EVERY = 6 * 3600
+
+
+def export_data(con):
+    out = {}
+    for prof in EXTRA:
+        cells = {}
+        for exp in ORDER:
+            t = tier(con, prof, None, exp)
+            if not t:
+                continue
+            unit, lo, hi, n = t[0]
+            cells[exp] = {"sum": (f"{money(lo)}–{money(hi)} ₽" if lo != hi else f"≈ {money(lo)} ₽"),
+                          "unit": (UNIT_TXT[unit] + EXTRA.get(prof, "")).strip(), "n": n}
+        if cells:
+            out[prof] = cells
+    n_all = len({r["message_id"] for prof in out for r in rows(con, prof)})
+    return {"updated": int(time.time()), "days": DAYS, "vacancies": n_all, "profs": out}
+
+
+def export(con, path=None):
+    """Пишем атомарно (через .tmp), права 644 — чтобы веб-сервер мог прочитать."""
+    import json, tempfile
+    path = path or EXPORT_PATH
+    d = os.path.dirname(path)
+    os.makedirs(d, mode=0o755, exist_ok=True)
+    data = export_data(con)
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+    return data
+
+
+def export_tick(con):
+    if MODE != "on":
+        return
+    r = con.execute("SELECT value FROM state WHERE key='zp_export'").fetchone()
+    if r and time.time() - float(r[0]) < EXPORT_EVERY and os.path.exists(EXPORT_PATH):
+        return
+    export(con)
+    con.execute("INSERT OR REPLACE INTO state(key, value) VALUES('zp_export', ?)", (str(time.time()),))
+    con.commit()

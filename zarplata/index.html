@@ -6,7 +6,7 @@
 <title>Сколько тебе должны платить — зарплаты в барах, кафе и кальянных Москвы и МО</title>
 <meta name="robots" content="noindex">
 <link rel="canonical" href="https://job.24delaidelo.ru/">
-<meta name="description" content="Узнай вилку зарплаты кальянщика, бармена, официанта, повара, хостес и бариста в Москве и МО — по вакансиям канала Делай Дело JOB.">
+<meta name="description" content="Узнай зарплату кальянщика, бармена, официанта, повара, хостес и бариста в Москве и МО — по вакансиям канала Делай Дело JOB.">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -115,7 +115,7 @@ function ddGo(ev, a, g){
   <div class="top"><img src="/favicon-120.png" alt="" width="44" height="44"><div><b>ЗАРПЛАТЫ HORECA</b><span>МОСКВА И МО · ДЕЛАЙ ДЕЛО JOB</span></div></div>
 
   <h1>Сколько тебе <em>должны платить?</em></h1>
-  <p class="lead">Покажем вилку за смену по вакансиям баров, кафе и кальянных Москвы и МО.</p>
+  <p class="lead">Покажем, сколько платят за смену в барах, кафе и кальянных Москвы и МО — по реальным вакансиям.</p>
 
   <p class="step"><i>1</i> Нажми на свою профессию 👇</p>
 
@@ -136,7 +136,7 @@ function ddGo(ev, a, g){
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.9 4.3 18.6 20c-.2 1-.9 1.3-1.7.8l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.2-8.3c.4-.4-.1-.6-.6-.2L6.1 13.4l-4.9-1.5c-1.1-.3-1.1-1 .2-1.6l19.1-7.4c.9-.3 1.7.2 1.4 1.4z"/></svg>
       <span id="bot-label">Полный разбор и свежие вакансии</span>
     </a>
-    <p class="hint">В Telegram нажми «Старт» — бот задаст 3 вопроса и покажет вилку под твой опыт</p>
+    <p class="hint">В Telegram нажми «Старт» — бот задаст 3 вопроса и покажет зарплату под твой опыт</p>
     <a class="btn btn-sec" id="ch-btn" href="https://t.me/+akMUlEWleh45ZWEy" onclick="return ddGo(event,this,'channel_click')">Смотреть все вакансии в канале</a>
     <p class="note">В Telegram-боте: из чего складывается доход, как его поднять и 3 свежие вакансии по профессии. Бесплатно.</p>
   </div>
@@ -161,9 +161,9 @@ var P=[
 ];
 var E=[["none","Без опыта"],["lt1","До года"],["1to3","1–3 года"],["gt3","3+ лет"]];
 var EN={none:"Без опыта обычно начинают стажёром или помощником — ставка ближе к нижней границе. Через 1–3 месяца можно выйти на полную.",
- lt1:"С первым опытом ты уже в середине вилки. Через пару месяцев смело проси пересмотреть оплату.",
- "1to3":"С таким опытом можно претендовать на верх вилки и выбирать место по проценту и чаевым.",
- gt3:"Ты — опытный специалист: верх вилки и выше, старший смены. Ищи вакансии с процентом от выручки."};
+ lt1:"С первым опытом тебе уже платят средние по рынку деньги. Через пару месяцев смело проси пересмотреть оплату.",
+ "1to3":"С таким опытом можно претендовать на зарплату выше средней и выбирать место по проценту и чаевым.",
+ gt3:"Ты — опытный специалист: самые высокие ставки, старший смены. Ищи вакансии с процентом от выручки."};
 var cur={p:null,e:"none"}, sent={};
 // Вилки «1–3 года» и «3+» — только в боте: сайт отвечает на вопрос частично, полный ответ и вакансии под него — в Telegram.
 var LOCK={"1to3":1,gt3:1};
@@ -186,8 +186,8 @@ function render(){
     document.getElementById("r-sum").innerHTML='<span class="blur" aria-hidden="true">0 000–0 000 ₽</span> <small>'+s[1]+'</small>';
     document.getElementById("r-src").textContent="опыт "+EXPN[cur.e]+" · считает бот по живым вакансиям";
     note.className="r-note r-lock";
-    note.textContent="🔒 Вилку для опыта "+EXPN[cur.e]+" бот посчитает по свежим вакансиям канала за 30 дней — и сразу покажет, где столько платят прямо сейчас.";
-    document.getElementById("bot-label").textContent="Открыть вилку в боте — бесплатно";
+    note.textContent="🔒 Зарплату для опыта "+EXPN[cur.e]+" бот посчитает по свежим вакансиям канала за последние 30 дней.";
+    document.getElementById("bot-label").textContent="Узнать зарплату в боте — бесплатно";
   }else{
     document.getElementById("r-sum").innerHTML=s[0]+' <small>'+s[1]+'</small>';
     document.getElementById("r-src").textContent=p[5];

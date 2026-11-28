@@ -1647,6 +1647,15 @@ HELP = ("📝 <b>Посты через бота</b>\n\n"
         "🖼 «Обложки» — выбрать одну из наших (подходящая отмечена ⭐) или без обложки.")
 
 
+HELPER_HELP = ("🛠 <b>Команды</b>\n\n"
+               "📝 Перешли вакансию или вставь текст — бот соберёт пост. "
+               "В канал уходит только по кнопке «✅ Опубликовать» или в назначенное время.\n\n"
+               "/post — как работают посты через бота\n"
+               "/ochered — запланированные посты: перенести, выпустить, убрать\n"
+               "/zp_post — индекс зарплат: превью, в канал по кнопке\n"
+               "/help — этот список")
+
+
 def on_message(con, msg):
     """Сообщения в личке от админа или помощника. True — обработали."""
     uid, chat = msg["from"]["id"], msg["chat"]["id"]
@@ -1654,7 +1663,9 @@ def on_message(con, msg):
         return False
     text = (msg.get("text") or msg.get("caption") or "").strip()
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
-    if cmd == "/post":
+    if cmd == "/help" and uid not in B.ADMIN_IDS:   # админам — полный список в bot.py
+        B.send(chat, HELPER_HELP)
+    elif cmd == "/post":
         B.send(chat, HELP)
     elif cmd == "/ochered":
         queue_list(con, chat)

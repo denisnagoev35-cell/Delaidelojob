@@ -139,7 +139,7 @@ def clean(text, skip=()):
 
 # Дополнительные хэштеги канала по должностям (после хэштега профессии)
 EXTRA_TAGS = [
-    (r"помо[щш]ни\w*\s+(?:кал[ьл]ян\w*|км\b)|#пкм\b|\bпкм\b", "#пкм"),
+    (r"помо[щш]ни\w*\s+(?:кал[ьл]ян\w*|км\b)|#пкм\b|\bпкм\b|\bб[эе]к\b(?![\s-]*(?:офис|бар|энд|end))", "#пкм"),   # «бэк» — помощник кальянщика
     (r"универсал", "#универсал"),
     (r"менеджер(?!у|ом|а\b)|управляющ", "#менеджер"),
 ]
@@ -147,7 +147,7 @@ EXTRA_TAGS = [
 
 # должность → профессии (все, что есть в названии: «Бармен-бариста» → бармен и бариста)
 TITLE_WORDS = [
-    ("kalyan", r"кал[ьл]янщ|кал[ьл]ян+\w*\s+мастер|\bп?км\b"),   # не «кальянной» — это место, не должность
+    ("kalyan", r"кал[ьл]янщ|кал[ьл]ян+\w*\s+мастер|\bп?км\b|\bб[эе]к\b(?![\s-]*(?:офис|бар|энд|end))"),   # не «кальянной» — это место, не должность
     ("bar", r"бармен|бартендер|миксолог"),
     ("barista", r"бариста"),
     ("waiter", r"официант|раннер"),
@@ -176,7 +176,7 @@ def hashtags(text, tags=(), words=True):
     profs = PB.find_profs(text, list(tags), B.PROF_TAGS, use_words=words) or []
     out = [B.PROF_TAGS[p] for p in profs if p in B.PROF_TAGS]
     # #км — кальянный мастер (не помощник): убираем «помощник кальянного мастера» и ищем мастера/кальянщика
-    rest = re.sub(r"помо[щш]ни\w*\s+(?:кал[ьл]ян\w*(?:\s+мастер\w*)?|км\b)", " ", text or "", flags=re.I)
+    rest = re.sub(r"(?:помо[щш]ни\w*|\bб[эе]к\b(?![\s-]*(?:офис|бар|энд|end)))\s+(?:кал[ьл]ян\w*(?:\s+мастер\w*)?|км\b)", " ", text or "", flags=re.I)
     if "#км" not in out and re.search(r"кал[ьл]ян\w*\s+мастер|кальянщик|(?<!\w)#?км\b", rest, re.I):
         out.append("#км")
     for rx, tag in EXTRA_TAGS:
@@ -332,7 +332,8 @@ def render(g, tags, conts, cut=0):
     venue, place = _cut(_s(g.get("venue"), 400), 50), _cut(_s(g.get("place"), 400), 110)
     for p in pos:
         title = _s(p.get("title"), 60)
-        prof = PB.find_prof(title, [], B.PROF_TAGS)
+        prof = PB.find_prof(title, [], B.PROF_TAGS) or \
+            next((k for k, rx in TITLE_WORDS if re.search(rx, title.lower())), None)   # «БЭК» → кальянщик
         emo = PROF_EMOJI.get(prof, "💼")
         pay = _cut(_s(p.get("pay"), 400), 90)
         pay = "" if EMPTY_RE.search(pay) else pay
@@ -1046,6 +1047,19 @@ def apply_patch(h, msg_text):
     """Короткая правка одной строкой: «адрес …», «ставка …», «график …», «отклик …».
     Возвращает (новый HTML, что поменяли) или (None, причина)."""
     t = (msg_text or "").strip()
+    tg = re.fullmatch(r"(?:(?:теги|тег|хэштеги?|хештеги?)\s*[:—-]?\s*)?((?:#[\w]+[\s,]*)+)", t, re.I)
+    if tg and "\n" not in t:   # «#пкм» или «теги #пкм #универсал» — меняем первую строку
+        tags = " ".join(re.findall(r"#\w+", tg.group(1))).lower()
+        lines = h.split("\n")
+        if lines and lines[0].startswith("#"):
+            lines[0] = tags
+        else:
+            lines[0:0] = [tags, ""]
+        return "\n".join(lines), "хэштеги"
+    if re.fullmatch(r"(?:подробност\w*|спойлер\w*|блок)\s*[:—-]?\s*(?:-|—|убрать|нет)", t, re.I):
+        if not BLOCK_RE.search(h):
+            return None, "блока подробностей и так нет"
+        return re.sub(r"\n{3,}", "\n\n", BLOCK_RE.sub("", h)).strip(), "подробности (убрал)"
     m = PATCH_RE.match(t)
     if not m or "\n" in t or len(t) > 250:
         return None, None
@@ -1122,7 +1136,26 @@ def apply_patch(h, msg_text):
 PATCH_HELP = ("Не понял правку. Можно одной строкой: <code>фишка такси после закрытия</code> "
               "(<code>фишка -</code> — убрать), <code>адрес м. Арбатская, ул. Новый Арбат 21</code>, "
               "<code>ставка 4 000 ₽ за смену + %</code>, <code>график 2/2 с 12:00</code>, "
-              "<code>отклик @username</code> — или пришли пост целиком.")
+              "<code>отклик @username</code>, <code>#пкм</code> — хэштеги, <code>подробности -</code> — убрать свёрнутый блок — или пришли пост целиком.")
+
+
+BLOCK_RE = re.compile(r"<blockquote[^>]*>.*?</blockquote>", re.S)
+
+
+def keep_details(old, new):
+    """iPhone копирует пост без свёрнутого блока подробностей — возвращаем его из прежней версии.
+    → (html, вернули ли блок). Пустые блоки и лишние пустые строки убираем."""
+    new = re.sub(r"<blockquote[^>]*>\s*</blockquote>", "", new or "")
+    new = re.sub(r"\n{3,}", "\n\n", "\n".join(l.rstrip() for l in new.split("\n"))).strip()
+    old_b = BLOCK_RE.search(old or "")
+    if not old_b or BLOCK_RE.search(new):
+        return new, False
+    lines = new.split("\n")
+    j = next((i for i, l in enumerate(lines) if re.match(r"(?:<b>)?📩|📝", l)), len(lines))
+    while j and not lines[j - 1].strip():
+        j -= 1
+    lines[j:j] = ["", old_b.group(0), ""] if j < len(lines) else ["", old_b.group(0)]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip(), True
 
 
 def auto_format(plain):
@@ -1177,7 +1210,10 @@ def on_edit_text(con, msg):
     ents = [x for x in (msg.get("entities") or []) if x.get("type") not in ("url", "mention", "hashtag",
                                                                            "phone_number", "email")]
     # с форматированием — сохраняем как есть; без (Android копирует голый текст) — восстанавливаем наш формат
-    d["text"] = (entities_html(msg["text"], msg.get("entities")) if ents else auto_format(msg.get("text") or "")).strip()
+    new = (entities_html(msg["text"], msg.get("entities")) if ents else auto_format(msg.get("text") or "")).strip()
+    d["text"], kept = keep_details(d.get("text", ""), new)
+    if kept:
+        B.send(msg["chat"]["id"], "ℹ️ Свёрнутый блок подробностей не скопировался — вернул его из прошлой версии.")
     d["by"] = "manual"
     d.pop("wait", None)
     _set(con, uid, d)
@@ -1584,7 +1620,9 @@ def queue_edit_text(con, msg, qid):
         raw = raw[cut:]
         ents = [dict(e, offset=e["offset"] - shift) for e in ents if e["offset"] >= shift]
     fmt = [x for x in ents if x.get("type") not in ("url", "mention", "hashtag", "phone_number", "email")]
-    text = (entities_html(raw, ents) if fmt else auto_format(raw)).strip()
+    text, kept = keep_details(r["text"], (entities_html(raw, ents) if fmt else auto_format(raw)).strip())
+    if kept:
+        B.send(chat, "ℹ️ Свёрнутый блок подробностей не скопировался — вернул его из прошлой версии.")
     limit = CAPTION_MAX if r["file_id"] else TEXT_MAX
     if plain_len(text) > limit:
         B.send(chat, f"⚠️ {plain_len(text)} знаков, лимит {limit}" + (" с обложкой" if r["file_id"] else "") +

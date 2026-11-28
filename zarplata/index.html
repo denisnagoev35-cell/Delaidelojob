@@ -136,12 +136,12 @@ function ddGo(ev, a, g){
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.9 4.3 18.6 20c-.2 1-.9 1.3-1.7.8l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1 9.2-8.3c.4-.4-.1-.6-.6-.2L6.1 13.4l-4.9-1.5c-1.1-.3-1.1-1 .2-1.6l19.1-7.4c.9-.3 1.7.2 1.4 1.4z"/></svg>
       <span id="bot-label">Полный разбор и свежие вакансии</span>
     </a>
-    <p class="hint">В Telegram нажми «Старт» — бот задаст 3 вопроса и покажет зарплату под твой опыт</p>
+    <p class="hint">В Telegram нажми «Старт» — бот уточнит район и покажет зарплату под твой опыт</p>
     <a class="btn btn-sec" id="ch-btn" href="https://t.me/+akMUlEWleh45ZWEy" onclick="return ddGo(event,this,'channel_click')">Смотреть все вакансии в канале</a>
     <p class="note">В Telegram-боте: из чего складывается доход, как его поднять и 3 свежие вакансии по профессии. Бесплатно.</p>
   </div>
 
-  <footer>Цифры — по вакансиям канала @delaidelojob за ноябрь 2026. Точная оплата указана в каждой вакансии.<br><a href="/privacy.html">Политика конфиденциальности</a> · ИНН 712701088690</footer>
+  <footer><span id="f-src">Цифры — по вакансиям канала @delaidelojob за ноябрь 2026.</span> Точная оплата указана в каждой вакансии.<br><a href="/privacy.html">Политика конфиденциальности</a> · ИНН 712701088690</footer>
 </main>
 <script>
 var P=[
@@ -165,6 +165,8 @@ var EN={none:"Без опыта обычно начинают стажёром �
  "1to3":"С таким опытом можно претендовать на зарплату выше средней и выбирать место по проценту и чаевым.",
  gt3:"Ты — опытный специалист: самые высокие ставки, старший смены. Ищи вакансии с процентом от выручки."};
 var cur={p:null,e:"none"}, sent={};
+var BOT_BASE="https://t.me/delaidelo24bot?start=vk_ads_bot";
+function botHref(){var a=document.getElementById("bot-btn");if(a)a.href=BOT_BASE+(cur.p?"-"+cur.p+"-"+cur.e:"");}
 // Вилки «1–3 года» и «3+» — только в боте: сайт отвечает на вопрос частично, полный ответ и вакансии под него — в Telegram.
 var LOCK={"1to3":1,gt3:1};
 var EXPN={"1to3":"1–3 года",gt3:"3+ лет"};
@@ -180,6 +182,7 @@ function render(){
   document.getElementById("result").hidden=false; eb.classList.add("on"); pb.classList.remove("hint");
   document.getElementById("step-exp").classList.add("on"); document.getElementById("cta").hidden=false;
   document.getElementById("r-name").textContent=p[1]+" "+p[2];
+  botHref();
   var s=(p[7]&&p[7][cur.e])||[p[3],p[4]];
   var locked=LOCK[cur.e]&&p[0]!=="staff", note=document.getElementById("r-note");
   if(locked){
@@ -197,11 +200,30 @@ function render(){
   }
 }
 render();
+// Живые цифры — те же, что считает бот (выгрузка раз в 6 часов). Нет ответа за 3 с — остаются вшитые.
+(function(){
+  if(!window.fetch)return;
+  var ctl=window.AbortController?new AbortController():null, t=setTimeout(function(){if(ctl)ctl.abort();},3000);
+  fetch("https://24delaidelo.ru/api/zp.json",{cache:"no-store",signal:ctl?ctl.signal:undefined}).then(function(r){return r.ok?r.json():null;}).then(function(j){
+    clearTimeout(t);
+    if(!j||!j.profs||!j.updated||Date.now()/1000-j.updated>7*86400)return;   // старше недели — не доверяем
+    var d=new Date(j.updated*1000), dd=("0"+d.getDate()).slice(-2)+"."+("0"+(d.getMonth()+1)).slice(-2);
+    P.forEach(function(p){
+      var L=j.profs[p[0]]; if(!L)return;
+      p[7]=p[7]||{};
+      Object.keys(L).forEach(function(e){ if(L[e]&&L[e].sum) p[7][e]=[L[e].sum,L[e].unit]; });
+      p[5]="по вакансиям канала за "+(j.days||30)+" дней · обновлено "+dd;
+    });
+    var f=document.getElementById("f-src");
+    if(f)f.textContent="Цифры — по "+(j.vacancies||"")+" вакансиям канала @delaidelojob за последние "+(j.days||30)+" дней, обновлено "+dd+".";
+    render();
+  }).catch(function(){});
+})();
 </script>
 <script>
 // Директ: люди с utm_source=yandex идут в бота с меткой ya_<ClientID Метрики> (бот шлёт конверсии в Метрику), запасной вариант — ya_direct; остальные — как раньше (vk_ads_bot).
 // Для Директа кнопка канала серая, главная — бот: через бота подписываются примерно вдвое чаще (17.11: 6 из 9 против 5 из 39).
-(function(){try{var s=new URLSearchParams(location.search).get('utm_source');if(s==='yandex'){var bb=document.getElementById('bot-btn');bb.href='https://t.me/delaidelo24bot?start=ya_direct';try{ym(113889494,'getClientID',function(id){if(/^\d{6,30}$/.test(String(id)))bb.href='https://t.me/delaidelo24bot?start=ya_'+id;});}catch(e){}var ch=document.getElementById('ch-btn');ch.href='https://t.me/+rLkyxOu5GEo4YWFi';ch.className='btn btn-sec muted';}}catch(e){}})();
+(function(){try{var s=new URLSearchParams(location.search).get('utm_source');if(s==='yandex'){BOT_BASE='https://t.me/delaidelo24bot?start=ya_direct';botHref();try{ym(113889494,'getClientID',function(id){if(/^\d{6,30}$/.test(String(id))){BOT_BASE='https://t.me/delaidelo24bot?start=ya_'+id;botHref();}});}catch(e){}var ch=document.getElementById('ch-btn');ch.href='https://t.me/+rLkyxOu5GEo4YWFi';ch.className='btn btn-sec muted';}}catch(e){}})();
 </script>
 </body>
 </html>

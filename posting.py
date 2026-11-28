@@ -1139,6 +1139,8 @@ PATCH_HELP = ("Не понял правку. Можно одной строко�
               "<code>отклик @username</code>, <code>#пкм</code> — хэштеги, <code>подробности -</code> — убрать свёрнутый блок — или пришли пост целиком.")
 
 
+# не форматирование поста: ссылки/ники и моноширинный шрифт (текст скопировали из блока кода) — снимаем
+PLAIN_ENTS = ("url", "mention", "hashtag", "cashtag", "bot_command", "phone_number", "email", "pre", "code")
 BLOCK_RE = re.compile(r"<blockquote[^>]*>.*?</blockquote>", re.S)
 
 
@@ -1207,10 +1209,10 @@ def on_edit_text(con, msg):
     if len((msg.get("text") or "").strip()) < MIN_LEN:
         B.send(msg["chat"]["id"], PATCH_HELP)
         return
-    ents = [x for x in (msg.get("entities") or []) if x.get("type") not in ("url", "mention", "hashtag",
-                                                                           "phone_number", "email")]
-    # с форматированием — сохраняем как есть; без (Android копирует голый текст) — восстанавливаем наш формат
-    new = (entities_html(msg["text"], msg.get("entities")) if ents else auto_format(msg.get("text") or "")).strip()
+    ents = [x for x in (msg.get("entities") or []) if x.get("type") not in PLAIN_ENTS]
+    # с форматированием — сохраняем как есть; без (Android копирует голый текст, моноширинный текст
+    # из заметок/чатов) — восстанавливаем наш формат
+    new = (entities_html(msg["text"], ents) if ents else auto_format(msg.get("text") or "")).strip()
     d["text"], kept = keep_details(d.get("text", ""), new)
     if kept:
         B.send(msg["chat"]["id"], "ℹ️ Свёрнутый блок подробностей не скопировался — вернул его из прошлой версии.")
@@ -1619,8 +1621,8 @@ def queue_edit_text(con, msg, qid):
         shift = len(raw[:cut].encode("utf-16-le")) // 2
         raw = raw[cut:]
         ents = [dict(e, offset=e["offset"] - shift) for e in ents if e["offset"] >= shift]
-    fmt = [x for x in ents if x.get("type") not in ("url", "mention", "hashtag", "phone_number", "email")]
-    text, kept = keep_details(r["text"], (entities_html(raw, ents) if fmt else auto_format(raw)).strip())
+    fmt = [x for x in ents if x.get("type") not in PLAIN_ENTS]
+    text, kept = keep_details(r["text"], (entities_html(raw, fmt) if fmt else auto_format(raw)).strip())
     if kept:
         B.send(chat, "ℹ️ Свёрнутый блок подробностей не скопировался — вернул его из прошлой версии.")
     limit = CAPTION_MAX if r["file_id"] else TEXT_MAX

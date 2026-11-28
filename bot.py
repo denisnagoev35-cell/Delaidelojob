@@ -446,7 +446,8 @@ def on_start(con, msg):
         set_user(con, uid, profession=prof, exp=exp)
         event(con, uid, "profession", prof)
         event(con, uid, "preset", f"{prof}:{exp}")
-        send(chat, f"{p['emoji']} <b>{p['name']}</b> · опыт: {T.EXPERIENCE[exp].lower()}\n\n"
+        exp_txt = "" if prof == "staff" else f" · опыт: {T.EXPERIENCE[exp].lower()}"   # хозу опыт на сайте не спрашиваем
+        send(chat, f"{p['emoji']} <b>{p['name']}</b>{exp_txt}\n\n"
                    f"Осталось одно — {T.ASK_REGION[2:].lower()}",
              kb([[(name, f"e:{prof}:{k}:{exp}") for k, name in T.REGIONS.items()]]))
         return
